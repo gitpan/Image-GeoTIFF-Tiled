@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:                Image-GeoTIFF-Tiled
-version:             0.01
+version:             0.02
 abstract:            A Perl interface to libgeotiff for tiled TIFF images, with support for extracting and iterating arbitrary shapes.
 license:             ~
 author:              
