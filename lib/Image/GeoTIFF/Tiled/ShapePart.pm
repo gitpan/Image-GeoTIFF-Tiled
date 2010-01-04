@@ -4,7 +4,7 @@ use warnings;
 use Carp;
 
 use vars qw/ $VERSION /;
-$VERSION = '0.03';
+$VERSION = '0.04';
 
 # Parts are lines (start != end) or horizontal vertexes (start = end)
 
@@ -70,17 +70,14 @@ sub _point {
 }
 sub start { shift->_point('start',@_); }
 sub end { shift->_point('end',@_); }
-sub upper { return shift->{_upper} }
-sub lower { return shift->{_lower} }
+sub upper { return $_[0]->{_upper} }
+sub lower { return $_[0]->{_lower} }
 
 sub _reset_points {
     my ($self) = @_;
-#    my ($start,$end) = ($self->start,$self->end);
     my ($x0,$y0,$x1,$y1) = ( @{$self->{_upper}}[0..1], @{$self->{_lower}}[0..1] );
     
     $self->{_points} = [];
-#    $self->{_points}[0] = $x0;
-#    $self->{_points}[int($y1 - $y0)] = $y0;
     
     return if $y0 == $y1;
 
@@ -101,32 +98,29 @@ sub _reset_points {
     my $factor = ($x1 - $x0) / ($y1 - $y0);
     my $i = 0;
     for ( my $y = $y0_; $y <= $y1_; $y++ ) {
-#        my $i = $y - int($y0) + 0.5;
         $self->{_points}[$i++] = [ $x0 + ($y - $y0) * $factor, $y ];
     }
     $self->{_y0_} = $y0_;
-#    $self->{_y1_} = $y1_;
 }
 
 sub get_point {
     # Get the [ x, y ] value of this part, given the integer y (latitude)
-    my ($self,$y) = @_;
-    croak "Require a y-value (latitude) to retrieve points." unless defined $y;
-    return unless defined $self->{_y0_};
-    my $i = int($y) + 0.5 - $self->{_y0_};
+    my ( $self, $y ) = @_;
+    croak "Require a y-value (latitude) to retrieve points" unless defined $y;
+    return unless defined $self->{ _y0_ };
+    my $i = int( $y ) + 0.5 - $self->{ _y0_ };
     if ( $i < 0 ) {
 #        carp "Latitude $y smaller than first point",$self->{_y0_};
         return;
     }
-    return $self->{_points}[$i];
-#    return defined $r ? $r : [];
+    return $self->{ _points }[ $i ];
 }
 
 sub get_x {
-    my ($self,$y) = @_;
-    my $p = $self->get_point($y);
+    my ( $self, $y ) = @_;
+    my $p = $self->get_point( $y );
     return unless defined $p;
-    return $p->[0];
+    return $p->[ 0 ];
 }
 
 #================================================================================================#
@@ -169,11 +163,11 @@ Returns, optionally sets, the ending point. Setting causes the intermediate poin
 
 =item upper
 
-Returns the start or end point, whichever has the lower latitude.
+Returns the start or end point, whichever has the smaller latitude.
 
 =item lower
 
-Returns the start or end point, whichever has the higher latitude.
+Returns the start or end point, whichever has the larger latitude.
 
 =item str
 
@@ -197,7 +191,7 @@ Returns just the $x value of C<get_point>, or C<undef> if there's no point along
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2009 Blake Willmarth.
+Copyright 2010 Blake Willmarth.
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of either:

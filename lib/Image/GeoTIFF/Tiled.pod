@@ -191,7 +191,7 @@ Image::GeoTIFF::Tiled::Shape, Image::GeoTIFF::Tiled::Iterator, Geo::Proj4
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2009 Blake Willmarth.
+Copyright 2010 Blake Willmarth.
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of either:

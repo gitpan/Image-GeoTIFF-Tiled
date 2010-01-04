@@ -16,7 +16,7 @@ use Image::GeoTIFF::Tiled::ShapePart;
 #   - rows should be ordered on longitude (x) (specific method call when using main method)
 
 use vars qw/ $VERSION /;
-$VERSION = '0.03';
+$VERSION = '0.04';
 
 #================================================================================================#
 
@@ -46,55 +46,47 @@ sub new {
 }
 
 sub load_shape {
-    my ($class,$tiff,$proj,$shape) = @_;
-    croak "loading shapes must be done by the class" 
-        if ref $class;
-    croak "Image::GeoTIFF::Tiled required" 
-        unless defined $tiff and ref $tiff and $tiff->isa("Image::GeoTIFF::Tiled");
+    my ( $class, $tiff, $proj, $shape ) = @_;
+    croak "loading shapes must be called as class invocant"
+        if ref $class and $class ne __PACKAGE__;
+    croak "Image::GeoTIFF::Tiled required"
+        unless defined $tiff
+            and ref $tiff
+            and $tiff->isa( "Image::GeoTIFF::Tiled" );
     if ( defined $proj ) {
-        croak "Geo::Proj4 required as the projection class" 
-            unless ref $proj and $proj->isa("Geo::Proj4");
+        croak "Geo::Proj4 required as the projection class"
+            unless ref $proj and $proj->isa( "Geo::Proj4" );
         load 'Geo::Proj4';
-    } 
+    }
     my $self;
-    if ( ref $shape and $shape->isa('Geo::ShapeFile::Shape') ) {
-        load 'Geo::ShapeFile';  # run-time loading
-        my $boundary = [ 
-            $shape->x_min,
-            $shape->y_min,
-            $shape->x_max,
-            $shape->y_max
-        ];
-        Image::GeoTIFF::Tiled::Shape->project_boundary($proj,$boundary)
+    if ( ref $shape and $shape->isa( 'Geo::ShapeFile::Shape' ) ) {
+        load 'Geo::ShapeFile';    # run-time loading
+        my $boundary =
+            [ $shape->x_min, $shape->y_min, $shape->x_max, $shape->y_max ];
+        Image::GeoTIFF::Tiled::Shape->project_boundary( $proj, $boundary )
             if defined $proj;
         $self = Image::GeoTIFF::Tiled::Shape->new(
-            [ $tiff->proj2pix_boundary(@$boundary) ]
-        );
-        for my $i ( 1..$shape->num_parts ) {
+            [ $tiff->proj2pix_boundary( @$boundary ) ] );
+        for my $i ( 1 .. $shape->num_parts ) {
             $self->reset_points;
-            for ( $shape->get_part($i) ) {
-                my ($x,$y) = 
-                    defined $proj 
-                        ? ($proj->forward($_->Y,$_->X))
-                        : ($_->X,$_->Y); 
-                $self->add_point($tiff->proj2pix($x,$y));
+            for ( $shape->get_part( $i ) ) {
+                my ( $x, $y ) =
+                    defined $proj
+                    ? ( $proj->forward( $_->Y, $_->X ) )
+                    : ( $_->X, $_->Y );
+                $self->add_point( $tiff->proj2pix( $x, $y ) );
             }
         }
+        $self->finish_loading;
     }
     else {
         croak "Cannot load unknown shape";
     }
     return $self;
-}
+} ## end sub load_shape
 
 sub project_boundary {
     my ($class,$proj,$b) = @_;
-#    my @points = (
-#        [ $b->[0], $b->[3] ],
-#        [ $b->[0], $b->[1] ],
-#        [ $b->[2], $b->[3] ],
-#        [ $b->[2], $b->[1] ]
-#    );
     my @px = ( $b->[0], $b->[0], $b->[2], $b->[2] );
     my @py = ( $b->[3], $b->[1], $b->[3], $b->[1] );
     for ( 0..3 ) {
@@ -139,51 +131,60 @@ sub corners {
 
 #================================================================================================#
 
+sub finish_loading {
+    my ( $self ) = @_;
+    $self->reset_points;
+    $self->sort_parts;
+}
+
+sub sort_parts {
+    # Sort parts on latitude (upper / highest point)
+    my ( $self ) = @_;
+    @{ $self->{ _parts } } =
+        sort { $a->upper->[ 1 ] <=> $b->upper->[ 1 ] } @{ $self->{ _parts } };
+}
+
 sub reset_points {
-    my ($self) = @_;
-    undef $self->{$_} for (
-        qw/ _first_point _last_end _last_start /
-    );
+    my ( $self ) = @_;
+    undef $self->{ $_ } for ( qw/ _first_point _last_end _last_start / );
 }
 
 sub add_point {
-    my ($self,$x,$y) = @_;
-    my $point = [ $x, $y ];
-#    print "adding point: ($x,$y)\n";
-    my $last_start = $self->{_last_start};
-    my $last_end = $self->{_last_end};
-    
+    my ( $self, $x, $y ) = @_;
+    my $point      = [ $x, $y ];
+    my $last_start = $self->{ _last_start };
+    my $last_end   = $self->{ _last_end };
+
     # First point
-    unless ( defined $self->{_first_point} ) {
-        $self->{_first_point} = $point;
-        $self->{_last_end} = $point;
+    unless ( defined $self->{ _first_point } ) {
+        $self->{ _first_point } = $point;
+        $self->{ _last_end }    = $point;
         return;
     }
-    
+
     # TEST IF $LAST_END IS A LOCAL HORIZONTAL VERTEX - IF SO ADD THE POINT AGAIN
     if ( defined $last_start
-            and &_local_hvertex($last_start,$last_end,$point) ) {
-        push @{$self->{_parts}}, 
+        and &_local_hvertex( $last_start, $last_end, $point ) )
+    {
+        push @{ $self->{ _parts } },
             Image::GeoTIFF::Tiled::ShapePart->new( $last_end, $last_end );
     }
-    
+
     # Add a new part
-    push @{$self->{_parts}}, 
+    push @{ $self->{ _parts } },
         Image::GeoTIFF::Tiled::ShapePart->new( $last_end, $point );
-    
-    # Last point (if equals first point) - test if it's a local horizontal vertex (only chance)
-    if ( $self->{_first_point}[0] == $x
-         and
-         $self->{_first_point}[1] == $y
-         and
-         &_local_hvertex( $last_end, $point, $self->get_part(0)->end )
-         ) {
-             push @{$self->{_parts}}, 
-                Image::GeoTIFF::Tiled::ShapePart->new( $point, $point );
+
+# Last point (if equals first point) - test if it's a local horizontal vertex (only chance)
+    if (    $self->{ _first_point }[ 0 ] == $x
+        and $self->{ _first_point }[ 1 ] == $y
+        and &_local_hvertex( $last_end, $point, $self->get_part( 0 )->end ) )
+    {
+        push @{ $self->{ _parts } },
+            Image::GeoTIFF::Tiled::ShapePart->new( $point, $point );
     }
-    $self->{_last_start} = $last_end;
-    $self->{_last_end} = $point;
-}
+    $self->{ _last_start } = $last_end;
+    $self->{ _last_end }   = $point;
+} ## end sub add_point
 
 sub _local_hvertex {
     # Test $p2
@@ -208,37 +209,35 @@ sub as_array {
 #================================================================================================#
 
 sub num_parts {
-    my ($self) = @_;
+    my ( $self ) = @_;
     return (
-       defined $self->{_parts} 
-        ? scalar @{$self->{_parts}} 
+        defined $self->{ _parts }
+        ? scalar @{ $self->{ _parts } }
         : 0
     );
 }
 
 sub get_part {
-    my ($self,$i) = @_;
-    return $self->{_parts}[$i];
+    my ( $self, $i ) = @_;
+    return $self->{ _parts }[ $i ];
 }
 
 sub get_x {
     # Retrieves all x-values|points along integer latitude y
-    my ($self,$y) = @_;
+    # - assume parts are pre-sorted on upper latitude
+    my ( $self, $y ) = @_;
     my @parts;
-#    local $| = 1; print "Getting x_values for $y: ";
-    for ( 0..$self->num_parts - 1 ) {
-        my $part = $self->get_part($_);
-        push @parts, $part
-            if $y >= $part->upper->[1] and $y <= $part->lower->[1];
+    for ( 0 .. $self->num_parts - 1 ) {
+        my $part    = $self->get_part( $_ );
+        my $upper_y = $part->upper->[ 1 ];
+        last if $y < $upper_y;    # Y above remaining parts
+        next unless $y >= $upper_y;
+        push @parts, $part if $y <= $part->lower->[ 1 ];
     }
     # @parts now has all parts of the shape containing $y
-#    my @points =
-    my @x = 
-#     return
-        sort 
-#            { $a->[0] <=> $b->[0] }    # point sorting
-            { $a <=> $b }
-                map { $_->get_x($y) } @parts;
+    my @x =
+        sort { $a <=> $b }
+        map  { $_->get_x( $y ) } @parts;
 #    print "(",join (', ',map { sprintf("%.2f",$_) } @x),")\n";
     return \@x;
 }
@@ -271,6 +270,7 @@ Image::GeoTIFF::Tiled::Shape
         y_max => ...
     });
     $shape->add_point($x,$y) for ...;
+    $shape->finish_loading;
     
     # Initiate the TIFF image object
     my $t = Image::GeoTIFF::Tiled->new( $tiff );
@@ -324,7 +324,7 @@ Retrieves the boundary values.
 
 =item boundary
 
-Equivalent to (C<$shape->x_min>, C<$shape->y_min>, C<$shape->x_max>, C<$shape->y_max>).
+Equivalent to (C<<$shape->x_min>>, C<<$shape->y_min>>, C<<$shape->x_max>>, C<<$shape->y_max>>).
 
 =item corners
 
@@ -350,6 +350,14 @@ Adds the ($x,$y) point to this shape. Only used for making custom shapes.
 
 Resets internal points metadata. Only used for making custom shapes, after a series of connecting points are made concentric ("parts" in ShapeFile parlance).
 
+=item sort_parts
+
+Sorts the internal parts array on the upper point latitude (called by finish_loading).
+
+=item finish_loading
+
+Call when done making a custom shape.
+
 =item project_boundary($proj,$b)
 
 Class method. Returns the projected boundary using projection (L<Geo::Proj4>) $proj and boundary $b, a 4-element array ref with x_min, y_min, x_max, y_max as values.
@@ -364,11 +372,11 @@ Repeated values indicate a local horizontal vertex.
 
 =head1 SEE ALSO
 
-Geo::Proj4, Image::GeoTIFF::Tiled, Image::GeoTIFF::Tiled::Iterator, Image::GeoTIFF::Tiled::ShapePart, L<Geo::ShapeFile>
+L<Geo::Proj4>, Image::GeoTIFF::Tiled, Image::GeoTIFF::Tiled::Iterator, Image::GeoTIFF::Tiled::ShapePart, L<Geo::ShapeFile>
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2009 Blake Willmarth.
+Copyright 2010 Blake Willmarth.
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of either:

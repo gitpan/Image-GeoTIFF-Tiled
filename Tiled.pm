@@ -6,7 +6,7 @@ use Image::GeoTIFF::Tiled::Iterator;
 use Image::GeoTIFF::Tiled::Shape;
 
 use vars qw( $VERSION );
-$VERSION = '0.03';
+$VERSION = '0.04';
 
 use Inline C => Config => 
              INC => '-I/usr/include/geotiff',
@@ -17,44 +17,47 @@ use Inline C => Config =>
             ;
 
 use Inline C => 'DATA',
-    VERSION => '0.03',
+    VERSION => '0.04',
     NAME => 'Image::GeoTIFF::Tiled'; 
 
 sub _constrain_boundary {
-    my ($self,$px_bound) = @_;
-    
+    my ( $self, $px_bound ) = @_;
+
     # Round to nearest int
-    for (0..1) { $px_bound->[$_] = sprintf("%.0f",$px_bound->[$_]+.00001); }
-#    for (2..3) { $px_bound->[$_] = sprintf("%.0f",$px_bound->[$_]+.00001); }
-    for (2..3) { $px_bound->[$_] = int($px_bound->[$_]); }
-    
+    for ( 0 .. 1 ) {
+        $px_bound->[ $_ ] = sprintf( "%.0f", $px_bound->[ $_ ] + .00001 );
+    }
+    for ( 2 .. 3 ) { $px_bound->[ $_ ] = int( $px_bound->[ $_ ] ); }
+
     # Check if it's completely outside the image
-    if ( 
-            $px_bound->[0] >= $self->width      # min_x to the right
-         || $px_bound->[1] >= $self->length     # min_y below
-         || $px_bound->[2] < 0                  # max_x to the left
-         || $px_bound->[3] < 0 ) {              # max_y above
+    if (
+        $px_bound->[ 0 ] >= $self->width        # min_x to the right
+        || $px_bound->[ 1 ] >= $self->length    # min_y below
+        || $px_bound->[ 2 ] < 0                 # max_x to the left
+        || $px_bound->[ 3 ] < 0
+       )
+    {                                           # max_y above
         return 0;
     }
-    
+
     # x_min
-    $px_bound->[0] = 0 if $px_bound->[0] < 0;
-    # y_min        
-    $px_bound->[1] = 0 if $px_bound->[1] < 0;
+    $px_bound->[ 0 ] = 0 if $px_bound->[ 0 ] < 0;
+    # y_min
+    $px_bound->[ 1 ] = 0 if $px_bound->[ 1 ] < 0;
     # x_max
-    $px_bound->[2] = $self->width - 1 if $px_bound->[2] >= $self->width;
-    # y_max    
-    $px_bound->[3] = $self->length - 1 if $px_bound->[3] >= $self->length;
-    
+    $px_bound->[ 2 ] = $self->width - 1 if $px_bound->[ 2 ] >= $self->width;
+    # y_max
+    $px_bound->[ 3 ] = $self->length - 1 if $px_bound->[ 3 ] >= $self->length;
+
     # Check if the dimensions no longer make sense
-    if ( 
-            $px_bound->[0] > $px_bound->[2]
-        ||  $px_bound->[1] > $px_bound->[3] ) {
+    if (   $px_bound->[ 0 ] > $px_bound->[ 2 ]
+        || $px_bound->[ 1 ] > $px_bound->[ 3 ] )
+    {
         return 0;
-    }    
-    
+    }
+
     1;
-}
+} ## end sub _constrain_boundary
 
 sub get_iterator_shape {
     my ($self,$shape) = @_;
@@ -64,7 +67,6 @@ sub get_iterator_shape {
     unless ( $self->_constrain_boundary(\@px_bound) ) {
         return;
     }
-#    print "Extracting data from (@px_bound)...\n";
     my $data = $self->extract_2D_array(@px_bound,$shape);
     return Image::GeoTIFF::Tiled::Iterator->new({
         image => $self,
@@ -76,7 +78,6 @@ sub get_iterator_shape {
 sub get_iterator_pix {
     my ($self,@px_bound) = @_;
     unless ( $self->_constrain_boundary(\@px_bound) ) {
-#        carp "Boundary outside of image";
         return;
     }
     my $data = $self->extract_2D_array(@px_bound,undef);
@@ -102,29 +103,6 @@ sub dump_tile {
 		}
     }
 }
-
-#=head3 $t->proj2pix_boundary_m($x_min,$y_min,$x_max,$y_max)
-#
-#Transforms the given projection rectangular boundary to its corresponding pixel boundary (mutative).
-#
-#=head3 $t->proj2pix_boundary($x_min,$y_min,$x_max,$y_max)
-#
-#Transforms the given projection rectangular boundary, returning its corresponding pixel boundary as a list.
-#
-
-#sub proj2pix_boundary_m {
-#    my ($self,@px_bound) = @_;
-#    $self->proj2pix_m($px_bound[0],$px_bound[1]);
-#    $self->proj2pix_m($px_bound[2],$px_bound[3]);
-#}
-
-#sub proj2pix_boundary {
-#    my ($self,@px_bound) = @_;
-#    return (
-#        $self->proj2pix($px_bound[0],$px_bound[1]),
-#        $self->proj2pix($px_bound[2],$px_bound[3])
-#    );
-#}
 
 1;
 
@@ -454,7 +432,8 @@ SV* get_tiles(SV* obj, int ul_tile, int br_tile) {
 
 void print_refcnt(SV* ref) {
     if ( DEBUG >= 1 )
-        printf("Reference count of [ref,array]: [%i,%i]\n",SvREFCNT(ref),SvREFCNT((SV*)SvRV(ref)));
+        printf( "Reference count of [ref,array]: [%d,%d]\n",
+            (int)SvREFCNT(ref),(int)SvREFCNT((SV*)SvRV(ref)) );
 }
 
 SV* _get_x_values(SV* shape, double y) {

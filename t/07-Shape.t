@@ -1,6 +1,9 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
+use Data::Dumper;
+$Data::Dumper::Indent = 0;
+$Data::Dumper::Deepcopy = 1;
 use Test::More tests => 33;
 use Image::GeoTIFF::Tiled;
 #use Image::GeoTIFF::Tiled::Shape;
@@ -38,11 +41,11 @@ my @shapes = (
         num_parts => 6,
         parts => [
                     [ [ 0, 0 ], [ 0, 2 ] ],
+                    [ [ 2, 1 ], [ 0, 0 ] ],
+                    [ [ 0, 0 ], [ 0, 0 ] ],
+                    [ [ 1, 3 ], [ 2, 1 ] ],
                     [ [ 0, 2 ], [ 1, 3 ] ],
                     [ [ 1, 3 ], [ 1, 3 ] ],
-                    [ [ 1, 3 ], [ 2, 1 ] ],
-                    [ [ 2, 1 ], [ 0, 0 ] ],
-                    [ [ 0, 0 ], [ 0, 0 ] ]
                  ],
         get => [
                     [ -1, [] ],
@@ -61,43 +64,47 @@ my @shapes = (
     
 );
 
-for my $tiff (<./t/samples/usgs*.tif>) {
-    my $image = Image::GeoTIFF::Tiled->new($tiff);
+for my $tiff ( <./t/samples/usgs*.tif> ) {
+    my $image = Image::GeoTIFF::Tiled->new( $tiff );
 
     for my $exp ( @shapes ) {
-        my ($b,$p) = ($exp->{boundary},$exp->{points});
-        my $s = Image::GeoTIFF::Tiled::Shape->new({
-            x_min => $b->[0], y_min => $b->[1],
-            x_max => $b->[2], y_max => $b->[3]
-            });
-        is( $s->x_min, $b->[0], 'x_min' );
-        is( $s->y_min, $b->[1], 'y_min' );
-        is( $s->x_max, $b->[2], 'x_max' );
-        is( $s->y_max, $b->[3], 'y_max' );
+        my ( $b, $p ) = ( $exp->{ boundary }, $exp->{ points } );
+        my $s = Image::GeoTIFF::Tiled::Shape->new( {
+                x_min => $b->[ 0 ],
+                y_min => $b->[ 1 ],
+                x_max => $b->[ 2 ],
+                y_max => $b->[ 3 ]
+            }
+        );
+        is( $s->x_min, $b->[ 0 ], 'x_min' );
+        is( $s->y_min, $b->[ 1 ], 'y_min' );
+        is( $s->x_max, $b->[ 2 ], 'x_max' );
+        is( $s->y_max, $b->[ 3 ], 'y_max' );
         my @b = $s->boundary;
         is_deeply( \@b, $b, 'boundary' );
         my @c = $s->corners;
         my $c = [
-                [ $b->[0], $b->[1] ],
-                [ $b->[0], $b->[3] ],
-                [ $b->[2], $b->[1] ],
-                [ $b->[2], $b->[3] ]
-                        ];
+            [ $b->[ 0 ], $b->[ 1 ] ],
+            [ $b->[ 0 ], $b->[ 3 ] ],
+            [ $b->[ 2 ], $b->[ 1 ] ],
+            [ $b->[ 2 ], $b->[ 3 ] ]
+        ];
         is_deeply( \@c, $c, 'corners' );
         # Points
-        $s->add_point(@{$_}) for @{$p};
+        $s->add_point( @{ $_ } ) for @{ $p };
+        $s->finish_loading;
         is( $s->num_parts, 6, 'number of parts' );
 #    print( Dumper($s->as_array),"\n" );
-        print( Dumper($s->as_array),"\n" ) unless 
-                is_deeply( $s->as_array, $exp->{parts}, 'parts' );
-        for my $g ( @{$exp->{get}} ) {
-            my $got = $s->get_x( $g->[0] );
+        print( Dumper( $s->as_array ), "\n" )
+            unless is_deeply( $s->as_array, $exp->{ parts }, 'parts' );
+        for my $g ( @{ $exp->{ get } } ) {
+            my $got = $s->get_x( $g->[ 0 ] );
             my $got_xs;
-            is_deeply( $got, $g->[1], 'get_x' );
+            is_deeply( $got, $g->[ 1 ], 'get_x' );
         }
         # Test when fed to TIFF
-        my $iter = $image->get_iterator_shape($s);
+        my $iter = $image->get_iterator_shape( $s );
 #    print Dumper($iter->buffer),"\n";
-        is_deeply( $iter->buffer, $exp->{pixels}, 'Iterator values' );
-    }
-}
+        is_deeply( $iter->buffer, $exp->{ pixels }, 'Iterator values' );
+    } ## end for my $exp ( @shapes )
+} ## end for my $tiff ( <./t/samples/usgs*.tif>)

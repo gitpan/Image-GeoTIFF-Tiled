@@ -6,7 +6,7 @@ use Carp;
 use Image::GeoTIFF::Tiled;
 
 use vars qw/ $VERSION /;
-$VERSION = '0.03';
+$VERSION = '0.04';
 
 #================================================================================================#
 # Constructor
@@ -49,12 +49,9 @@ sub _verify {
     
         unless (ref $buffer and ref $buffer eq 'ARRAY'
         and ref $buffer->[0] and ref $buffer->[0] eq 'ARRAY') {
-#             print Dumper $buffer;
              confess "Buffered data needs to be a 2D arrayref";
          }
     # Note: if rows,cols = 0 then just return undef
-#    confess "No rows/cols; boundary needs to be (x_min,y_min,x_max,y_max) pixels."
-#        unless $self->rows > 0 and $self->cols > 0;
 }
 
 sub _reset {
@@ -119,8 +116,7 @@ sub next {
             return;
         }
         $val = $self->buffer->[$row][$col];
-    # Return the next valid value
-#    $val = $self->next while defined $val and $val == -1;
+        # Return the next valid value
         redo NEXT_VAL if $val == -1;
     }
     # Store coordinate

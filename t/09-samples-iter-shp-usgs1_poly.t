@@ -1,7 +1,8 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 2; 
+#use Test::More tests => 2; 
+use Test::More;
 
 eval { require Geo::ShapeFile; };
 if($@) { print "1..1\nok 1\n"; warn "skipping, Geo::ShapeFile not available\n"; exit } 
@@ -31,3 +32,4 @@ my $iter = $image->get_iterator_shape($shape);
 $SIG{__WARN__} = sub { warn @_ unless $_[0] =~ /-78.2019736193844,41.05929317151/ };
 test_contains($iter,$shp_shape,$proj);
 
+done_testing( 2 );

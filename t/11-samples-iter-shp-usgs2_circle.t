@@ -1,7 +1,8 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 9168;
+#use Test::More tests => 9168;
+use Test::More;
 
 eval { require Geo::ShapeFile; };
 if($@) { print "1..1\nok 1\n"; warn "skipping, Geo::ShapeFile not available\n"; exit } 
@@ -64,3 +65,4 @@ while ( defined(my $val = $iter->next) ) {
 is( $row + 1, $iter->rows, '(circle) total number of rows' ); 
 
     
+done_testing( 9168 );

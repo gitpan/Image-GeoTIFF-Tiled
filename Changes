@@ -1,5 +1,11 @@
 Revision history for Perl extension Image::GeoTIFF::Tiled.
 
+0.04  Wed Sep 30 00:00:00 2009
+    - improved get_x() effeciency by using part sorting
+    - fixed pod code (ticket #51743)
+    - lazy test plans in test scripts that require optional
+      modules to prevent failed tests
+
 0.03  Wed Sep 02 04:27:00 2009
     - fixed bug where x values during ray-casting were being
       sorted lexically instead of numerically

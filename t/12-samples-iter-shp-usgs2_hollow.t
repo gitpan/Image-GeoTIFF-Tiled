@@ -2,7 +2,8 @@
 use strict;
 use warnings;
 use Data::Dumper;
-use Test::More tests => 8; 
+#use Test::More tests => 8; 
+use Test::More;
 
 eval { require Geo::ShapeFile; };
 if($@) { print "1..1\nok 1\n"; warn "skipping, Geo::ShapeFile not available\n"; exit } 
@@ -35,3 +36,4 @@ for my $i (1..2) {
         'Shape pixels okay'
     );
 }
+done_testing(8);

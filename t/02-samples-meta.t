@@ -1,7 +1,8 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 14; 
+#use Test::More tests => 14; 
+use Test::More;
 
 eval { require Image::ExifTool; };
 if($@) { print "1..1\nok 1\n"; warn "skipping, Image::ExifTool not available\n"; exit } 
@@ -51,3 +52,4 @@ for my $tiff (<./t/samples/usgs*.tif>) {
     );
 
 }
+done_testing( 14 );
