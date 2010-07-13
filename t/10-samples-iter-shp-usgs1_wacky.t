@@ -27,6 +27,6 @@ my $iter = $image->get_iterator_shape( $shape );
 
 #$iter->dump_buffer;
 
-test_contains( $iter, $shp_shape );
+test_contains( $image, $iter, $shp_shape );
 
 done_testing( 2 );

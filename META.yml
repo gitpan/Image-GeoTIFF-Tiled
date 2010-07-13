@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Image-GeoTIFF-Tiled
-version:            0.04
+version:            0.05
 abstract:           A Perl interface to libgeotiff for reading tiled TIFF images, with support for extracting and iterating arbitrary shapes.
 author:
     - Blake Willmarth <bwillmarth@gmail.com>
@@ -18,7 +18,7 @@ no_index:
     directory:
         - t
         - inc
-generated_by:       ExtUtils::MakeMaker version 6.54
+generated_by:       ExtUtils::MakeMaker version 6.55_02
 meta-spec:
     url:      http://module-build.sourceforge.net/META-spec-v1.4.html
     version:  1.4

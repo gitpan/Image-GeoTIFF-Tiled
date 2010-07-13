@@ -1,7 +1,17 @@
 Revision history for Perl extension Image::GeoTIFF::Tiled.
 
+0.05  Mon Jul 12 15:38:00 2010
+    - return value of coordinates are lists
+    - removed image reference from Iterator.pm to prevent 
+      circular references
+    - added adjacencies() to Iterator.pm (adjacent values)
+    - added bounds() to Tiled.pm (image boundary)
+    - soft-coded null value (-1) to $NULL package variable in 
+      Iterator.pm
+    - added convenince method get_iterator() to Tiled.pm
+
 0.04  Wed Sep 30 00:00:00 2009
-    - improved get_x() effeciency by using part sorting
+    - improved get_x() efficiency by using part sorting
     - fixed pod code (ticket #51743)
     - lazy test plans in test scripts that require optional
       modules to prevent failed tests

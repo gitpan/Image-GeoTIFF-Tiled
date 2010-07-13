@@ -16,7 +16,7 @@ use Image::GeoTIFF::Tiled::ShapePart;
 #   - rows should be ordered on longitude (x) (specific method call when using main method)
 
 use vars qw/ $VERSION /;
-$VERSION = '0.04';
+$VERSION = '0.05';
 
 #================================================================================================#
 

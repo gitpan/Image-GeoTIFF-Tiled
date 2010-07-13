@@ -21,7 +21,7 @@ for my $i (1..2) {
 
 #    $iter->dump_buffer;
 
-    test_contains($iter,$shp_shape);
+    test_contains($image,$iter,$shp_shape);
 
     ok(
         ! ( grep {

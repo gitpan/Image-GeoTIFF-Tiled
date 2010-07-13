@@ -97,6 +97,12 @@ The total size (in bytes) of a tile of pixels (= tile_width * tile_length if bps
 
 The number of tiles in a row of the image.
 
+=item bounds($proj)
+
+Returns (xmin,ymin,xmax,ymax) boundary of image. Will be in projected coordinates if a L<Geo::Proj4> projection object isn't passed.
+
+Uses C<wantarray> to determine whether to return a list or array-ref.
+
 =item dump_tile($tile)
 
 Pretty-prints the given tile.
@@ -182,6 +188,10 @@ Given a rectangular pixel boundary, returns a L<Image::GeoTIFF::Tiled::Iterator>
 =item get_iterator_shape($shape)
 
 Given a L<Image::GeoTIFF::Tiled::Shape> object, returns a L<Image::GeoTIFF::Tiled::Iterator> that can iterate over only those pixel values inside the arbitrary shape, or undef if the given shape is completely outside the image.
+
+=item get_iterator(...)
+
+Convenience entry method to get_iterator_* methods.
 
 =back
 

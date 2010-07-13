@@ -4,7 +4,7 @@ use warnings;
 use Carp;
 
 use vars qw/ $VERSION /;
-$VERSION = '0.04';
+$VERSION = '0.05';
 
 # Parts are lines (start != end) or horizontal vertexes (start = end)
 

@@ -6,18 +6,15 @@ use Image::GeoTIFF::Tiled::Iterator;
 use Image::GeoTIFF::Tiled::Shape;
 
 use vars qw( $VERSION );
-$VERSION = '0.04';
+$VERSION = '0.05';
 
 use Inline C => Config => 
              INC => '-I/usr/include/geotiff',
              LIBS => '-ltiff -lgeotiff'
-#             AUTO_INCLUDE => '#include <tiff.h>',
-#             AUTO_INCLUDE => '#include <geotiff.h>',
-#             AUTO_INCLUDE => '#include <xtiffio.h>' 
             ;
 
 use Inline C => 'DATA',
-    VERSION => '0.04',
+    VERSION => '0.05',
     NAME => 'Image::GeoTIFF::Tiled'; 
 
 sub _constrain_boundary {
@@ -59,6 +56,24 @@ sub _constrain_boundary {
     1;
 } ## end sub _constrain_boundary
 
+sub bounds {
+    my ($self,$proj) = @_;
+    my ( $xmin, $ymax ) = $self->pix2proj( 0, 0 );
+    my ( $xmax, $ymin ) = $self->pix2proj( $self->width, $self->length );
+    if ( $proj ) {
+        ($ymax,$xmin) = $proj->inverse( $xmin, $ymax );
+        ($ymin,$xmax) = $proj->inverse( $xmax, $ymin );
+    }
+    ( $xmin, $ymin, $xmax, $ymax );
+}    
+
+sub get_iterator {
+    my $self = shift;
+    return $self->get_iterator_shape(@_) if @_ == 1;
+    return $self->get_iterator_pix(@_) if @_ == 4;
+    confess "Unknown args: @_";
+}
+
 sub get_iterator_shape {
     my ($self,$shape) = @_;
     croak "Need a Image::GeoTIFF::Tiled::Shape object" 
@@ -69,7 +84,7 @@ sub get_iterator_shape {
     }
     my $data = $self->extract_2D_array(@px_bound,$shape);
     return Image::GeoTIFF::Tiled::Iterator->new({
-        image => $self,
+        # image => $self,
         boundary => \@px_bound,
         buffer => $data
     });
@@ -82,25 +97,25 @@ sub get_iterator_pix {
     }
     my $data = $self->extract_2D_array(@px_bound,undef);
     return Image::GeoTIFF::Tiled::Iterator->new({
-        image => $self,
+        # image => $self,
         boundary => \@px_bound,
         buffer => $data
     });
 }
 
 sub dump_tile {
-	my ($self,$tile) = @_;
-	croak "No tile specified" unless defined $tile;
-	my $buffer = $self->get_tile($tile);
-	local $| = 1;
+    my ($self,$tile) = @_;
+    croak "No tile specified" unless defined $tile;
+    my $buffer = $self->get_tile($tile);
+    local $| = 1;
     for ( 0 .. $self->tile_size - 1 ) {
         printf("%03i", $buffer->[$_]);
         if ( ($_ + 1) % ($self->tile_width) == 0) {
             print("\n");
-		}
+        }
         else {
             print(" ");
-		}
+        }
     }
 }
 

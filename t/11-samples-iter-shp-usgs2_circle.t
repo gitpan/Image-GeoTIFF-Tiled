@@ -21,7 +21,7 @@ my $shp_shape = $shp->get_shp_record(1);
 my $shape = 
     Image::GeoTIFF::Tiled::Shape->load_shape($image,undef,$shp_shape);
 my $iter = $image->get_iterator_shape($shape);
-test_contains($iter,$shp_shape);
+test_contains($image,$iter,$shp_shape);
 my $row = -1;               # Incremented, from 0
 my $col = $iter->cols / 2;  # Start from the middle
 my $top = 1;                # Top of the circle flag
