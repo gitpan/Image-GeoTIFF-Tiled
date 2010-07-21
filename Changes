@@ -1,5 +1,30 @@
 Revision history for Perl extension Image::GeoTIFF::Tiled.
 
+0.07  Wed Jul 21 00:00:00 2010
+    - Smaller usgs samples
+    - Added more tests
+    - Iterator null value now undef, not -1 (some rasters can have negative
+      values).
+    - Moved get_* and extract_* methods out of C and into Perl. Data is unpacked
+      with unpack() and a template and extract_grid and filter_shape no longer
+      suffer from memory errors (obviously).
+    - Fixed bug in Shape.pm get_parts() where given latitude was not
+      being transformed to the middle of the pixel. This caused some latitudes
+      to erronously return only 1 vertex when ray-casting. An additional clause
+      is now in place in filter_shape() to test for this situation.
+    - Renamed many methods to make naming more standardized and sensical
+    - Updated pod
+
+0.06  Wed Jul 14 02:24:00 2010
+    - Now handles floating-point rasters and bps > 8
+    - Added get_iterator_tile[s] methods
+    - Exposed constrain_boundary method, which now copies its 
+      inputs
+    - Added lots of new metadata and sanity checks
+    - Added statistics test with new test image (dem)
+    - Updated pod
+    - Not released to CPAN (passed tests but too many lingering issues)
+
 0.05  Mon Jul 12 15:38:00 2010
     - return value of coordinates are lists
     - removed image reference from Iterator.pm to prevent 

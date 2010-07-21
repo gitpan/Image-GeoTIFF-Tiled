@@ -30,15 +30,15 @@ for my $tiff (<./t/samples/usgs*.tif>) {
 
     for ( @test ) {
         my ($px,$py) = ($_->[0],$_->[1]);
-        my $t = $image->get_tile_pix($px,$py);
+        my $t = $image->pix2tile($px,$py);
         is( $t, $_->[2], "($px,$py) tile number: $t" );
-        my $i = $image->get_pix_idx($px,$py);
+        my $i = $image->pix2tileidx($px,$py);
         is( $i, $_->[3], "($px,$py) index into tile: $i" );
-        my ($x,$y) = $image->get_pix_tile( $t, $i );
+        my ($x,$y) = $image->tile2pix( $t, $i );
         is( $x, $px, "x pixel get coordinate of tile ($t) + index ($i)" );
         is( $y, $py, "y pixel get coordinate of tile ($t) + index ($i)" );
         ($x,$y) = (0,0);
-        $image->set_pix_tile( $t, $i, $x, $y );
+        $image->tile2pix_m( $t, $i, $x, $y );
         is( $x, $px, "x pixel get coordinate of tile ($t) + index ($i)" );
         is( $y, $py, "y pixel get coordinate of tile ($t) + index ($i)" );
     }

@@ -15,9 +15,11 @@ sub test_contains {
     my $total = 0;
     my $success;
     while ( defined( my $val = $iter->next ) ) {
+        my ( $px, $py ) = $iter->current_coord;
         my ( $x, $y ) =
-            map { sprintf( "%.6f", $_ ) }
-            $image->pix2proj( $iter->current_coord );
+            map sprintf( "%.6f", $_ ), $image->pix2proj( $px, $py );
+        # printf "Testing shape pixel (%.2f,%.2f) (%.2f,%.2f)\n",$px,$py,$x,$y;
+
         if ( defined $proj ) {
             ( $y, $x ) = $proj->inverse( $x, $y );
         }
@@ -28,7 +30,8 @@ sub test_contains {
             )
         {
             $fail++;
-            warn "Failure at ($x,$y)";
+            warn
+                sprintf( "Failure at (%.2f,%.2f) - not in shape.\n", $px, $py );
         }
         $total++;
     }
@@ -40,13 +43,15 @@ sub test_contains {
             . " success rate)"
       );
 
-# Reverse the buffer values and test the -1 values are in fact outside the shape
+# Reverse the buffer values and test the null values are in fact outside the shape
     my @old_buffer = @{ $iter->buffer };
     my $evil_buffer;
     for my $i ( 0 .. @{ $iter->buffer } - 1 ) {
         for my $j ( 0 .. @{ $iter->buffer->[ $i ] } - 1 ) {
+            my $val = $iter->buffer->[ $i ][ $j ];
             $evil_buffer->[ $i ][ $j ] =
-                $iter->buffer->[ $i ][ $j ] == -1 ? 1 : -1;
+                # $val == -1 ? 1 : -1;
+                defined $val ? undef : 1;
         }
     }
 #    print Dumper(\@old_buffer), "\n", Dumper($evil_buffer),"\n";
@@ -54,6 +59,7 @@ sub test_contains {
     $iter->{ buffer } = $evil_buffer;
     $fail             = 0;
     $total            = 0;
+    # print "Testing inverted buffer.\n";
     while ( defined( my $val = $iter->next ) ) {
         my ( $x, $y ) =
             map { sprintf( "%.6f", $_ ) }
@@ -68,7 +74,9 @@ sub test_contains {
             )
         {
             $fail = 1;
-            warn "Failure at ($x,$y)";
+            # warn "Failure at ($x,$y)";
+            warn sprintf( "Failure at (%.2f,%.2f) - in shape.\n",
+                $image->proj2pix( $x, $y ) );
         }
         $total++;
     }

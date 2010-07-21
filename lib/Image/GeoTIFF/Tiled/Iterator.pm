@@ -5,9 +5,10 @@ use Carp;
 
 use Image::GeoTIFF::Tiled;
 
-use vars qw/ $VERSION $NULL /;
-$VERSION = '0.05';
-$NULL    = -1;
+use vars qw/ $VERSION /;
+$VERSION = '0.07';
+# $NULL = undef;
+# $NULL    = -1;
 
 #================================================================================================#
 # Constructor
@@ -127,7 +128,8 @@ sub next {
         }
         $val = $self->buffer->[ $row ][ $col ];
         # Return the next valid value
-        redo NEXT_VAL if $val == $NULL;
+        redo NEXT_VAL unless defined $val;
+        # redo NEXT_VAL if $val == $NULL;
     }
     # Store coordinate
     $self->{ current_row } = $row;
@@ -168,7 +170,8 @@ sub dump_buffer {
         for my $c ( 0 .. $self->cols - 1 ) {
             print " " if $c != 0;
             my $v = $self->buffer->[ $r ][ $c ];
-            if ( $v == $NULL ) {
+            # if ( $v == $NULL ) {
+            if ( not defined $v ) {
                 print '---';
             }
             else {
@@ -259,8 +262,6 @@ Resets the iterator so the next() returns the first value.
 =item adjacencies
 
 Returns the 8 adjacent values to the current coordinate as a list, starting from the northwest and going clockwise.
-
-Uses C<wantarray> to determine whether to return a list or array-ref.
 
 =item dump_buffer
 

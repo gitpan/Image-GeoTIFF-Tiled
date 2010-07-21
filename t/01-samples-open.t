@@ -2,9 +2,10 @@
 use strict;
 use warnings;
 use Image::GeoTIFF::Tiled;
-use Test::More tests => 2;
-
-for my $tiff (<./t/samples/usgs*.tif>) {
+use Test::More;
+my @images = <./t/samples/*.tif>;
+plan tests => scalar @images;
+for my $tiff (@images) {
 #    print "Test image: $tiff\n";
     eval { Image::GeoTIFF::Tiled->new( $tiff ) };
     if ($@) {

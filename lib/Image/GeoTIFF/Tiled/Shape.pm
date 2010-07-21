@@ -16,29 +16,29 @@ use Image::GeoTIFF::Tiled::ShapePart;
 #   - rows should be ordered on longitude (x) (specific method call when using main method)
 
 use vars qw/ $VERSION /;
-$VERSION = '0.05';
+$VERSION = '0.07';
 
 #================================================================================================#
 
 sub new {
-    my ($class,$opts) = @_;
+    my ( $class, $opts ) = @_;
     my $self = {};
-    bless ($self,$class);
-    
+    bless( $self, $class );
+
     if ( ref $opts eq 'ARRAY' ) {
         croak "Need x_min, y_min, x_max, y_max elements."
             unless scalar @$opts == 4;
-        $self->x_min($opts->[0]);
-        $self->y_min($opts->[1]);
-        $self->x_max($opts->[2]);
-        $self->y_max($opts->[3]);
+        $self->x_min( $opts->[ 0 ] );
+        $self->y_min( $opts->[ 1 ] );
+        $self->x_max( $opts->[ 2 ] );
+        $self->y_max( $opts->[ 3 ] );
     }
     elsif ( ref $opts eq 'HASH' ) {
-        for ( keys %{$opts} ) {
-            $self->x_min($opts->{$_}) if $_ eq 'x_min';
-            $self->y_min($opts->{$_}) if $_ eq 'y_min';
-            $self->x_max($opts->{$_}) if $_ eq 'x_max';
-            $self->y_max($opts->{$_}) if $_ eq 'y_max';
+        for ( keys %{ $opts } ) {
+            $self->x_min( $opts->{ $_ } ) if $_ eq 'x_min';
+            $self->y_min( $opts->{ $_ } ) if $_ eq 'y_min';
+            $self->x_max( $opts->{ $_ } ) if $_ eq 'x_max';
+            $self->y_max( $opts->{ $_ } ) if $_ eq 'y_max';
         }
     }
     croak "Boundary required." unless grep { defined $_ } $self->boundary;
@@ -86,41 +86,38 @@ sub load_shape {
 } ## end sub load_shape
 
 sub project_boundary {
-    my ($class,$proj,$b) = @_;
-    my @px = ( $b->[0], $b->[0], $b->[2], $b->[2] );
-    my @py = ( $b->[3], $b->[1], $b->[3], $b->[1] );
-    for ( 0..3 ) {
-         # See Geo::Proj4 documentation - this is correct
-        ( $px[$_], $py[$_] ) = $proj->forward( $py[$_], $px[$_] );
-    } 
-    ($b->[0],$b->[2]) = minmax( @px );
-    ($b->[1],$b->[3]) = minmax( @py );
+    my ( $class, $proj, $b ) = @_;
+    my @px = ( $b->[ 0 ], $b->[ 0 ], $b->[ 2 ], $b->[ 2 ] );
+    my @py = ( $b->[ 3 ], $b->[ 1 ], $b->[ 3 ], $b->[ 1 ] );
+    for ( 0 .. 3 ) {
+        # See Geo::Proj4 documentation - this is correct
+        ( $px[ $_ ], $py[ $_ ] ) = $proj->forward( $py[ $_ ], $px[ $_ ] );
+    }
+    ( $b->[ 0 ], $b->[ 2 ] ) = minmax( @px );
+    ( $b->[ 1 ], $b->[ 3 ] ) = minmax( @py );
 }
 
 #================================================================================================#
 
 sub _elem {
     my $self = shift;
-    my $key = shift;
-    return $self->{"_$key"} unless @_;
-    $self->{"_$key"} = $_[0];
+    my $key  = shift;
+    return $self->{ "_$key" } unless @_;
+    $self->{ "_$key" } = $_[ 0 ];
 }
 # Config accessors
-sub x_min { &_elem(shift,'x_min', @_); }
-sub y_min { &_elem(shift,'y_min', @_); }
-sub x_max { &_elem(shift,'x_max', @_); }
-sub y_max { &_elem(shift,'y_max', @_); }
+sub x_min { &_elem( shift, 'x_min', @_ ); }
+sub y_min { &_elem( shift, 'y_min', @_ ); }
+sub x_max { &_elem( shift, 'x_max', @_ ); }
+sub y_max { &_elem( shift, 'y_max', @_ ); }
+
 sub boundary {
-    my ($self) = @_;
-    return (
-        $self->x_min,
-        $self->y_min,
-        $self->x_max,
-        $self->y_max
-    );
+    my ( $self ) = @_;
+    return ( $self->x_min, $self->y_min, $self->x_max, $self->y_max );
 }
+
 sub corners {
-    my ($self) = @_;
+    my ( $self ) = @_;
     return (
         [ $self->x_min, $self->y_min ],
         [ $self->x_min, $self->y_max ],
@@ -188,28 +185,27 @@ sub add_point {
 
 sub _local_hvertex {
     # Test $p2
-    my ($p1,$p2,$p3) = @_;
-    return 1 if
-        ( $p2->[1] < $p1->[1] && $p2->[1] < $p3->[1] )
-            or
-        ( $p2->[1] > $p1->[1] && $p2->[1] > $p3->[1] );
+    my ( $p1, $p2, $p3 ) = @_;
+    return 1
+        if ( $p2->[ 1 ] < $p1->[ 1 ] && $p2->[ 1 ] < $p3->[ 1 ] )
+        or ( $p2->[ 1 ] > $p1->[ 1 ] && $p2->[ 1 ] > $p3->[ 1 ] );
     0;
 }
 
 sub as_array {
-    my ($self) = @_;
+    my $self = shift;
     my @a;
-    for ( 0..$self->num_parts-1 ) {
-        my $p = $self->get_part($_);
+    for ( 0 .. $self->num_parts - 1 ) {
+        my $p = $self->get_part( $_ );
         push @a, [ $p->start, $p->end ];
     }
     \@a;
-}   
+}
 
 #================================================================================================#
 
 sub num_parts {
-    my ( $self ) = @_;
+    my $self = shift;
     return (
         defined $self->{ _parts }
         ? scalar @{ $self->{ _parts } }
@@ -219,27 +215,37 @@ sub num_parts {
 
 sub get_part {
     my ( $self, $i ) = @_;
-    return $self->{ _parts }[ $i ];
+    $self->{ _parts }[ $i ];
 }
 
 sub get_x {
     # Retrieves all x-values|points along integer latitude y
     # - assume parts are pre-sorted on upper latitude
     my ( $self, $y ) = @_;
+    $y = int( $y ) + 0.5;       # Center the latitude!
     my @parts;
     for ( 0 .. $self->num_parts - 1 ) {
         my $part    = $self->get_part( $_ );
         my $upper_y = $part->upper->[ 1 ];
+        my $lower_y = $part->lower->[ 1 ];
+        # print "$y <=> $upper_y - $lower_y\n";
         last if $y < $upper_y;    # Y above remaining parts
+                                  # print $part->str,"\n";
         next unless $y >= $upper_y;
-        push @parts, $part if $y <= $part->lower->[ 1 ];
+        if ( $y <= $lower_y ) {
+            # print "Added part.\n";
+            push @parts, $part;
+        }
     }
     # @parts now has all parts of the shape containing $y
+    # print "Parts:\n",join("\n\n",map $_->str,@parts),"\n";
     my @x =
         sort { $a <=> $b }
+        grep defined $_,
         map  { $_->get_x( $y ) } @parts;
-#    print "(",join (', ',map { sprintf("%.2f",$_) } @x),")\n";
-    return \@x;
+    # print "(",join (', ',map { sprintf("%.2f",$_) } @x),")\n";
+
+    \@x;
 }
 
 # - NOTE: IF TWO EQUAL X VALUES ARE OBTAINED, IT'S A LOCAL HORIZONTAL VERTEX AND SHOULDN'T CHANGE THE
@@ -392,5 +398,4 @@ later version, or
 =back
 
 =cut
-
 

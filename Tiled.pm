@@ -2,119 +2,447 @@ package Image::GeoTIFF::Tiled;
 use strict;
 use warnings;
 use Carp;
+use Data::Dumper;
+use List::MoreUtils qw(natatime mesh);
+use IO::Handle;
 use Image::GeoTIFF::Tiled::Iterator;
 use Image::GeoTIFF::Tiled::Shape;
 
 use vars qw( $VERSION );
-$VERSION = '0.05';
+$VERSION = '0.07';
 
-use Inline C => Config => 
-             INC => '-I/usr/include/geotiff',
-             LIBS => '-ltiff -lgeotiff'
-            ;
+use Inline C => Config => INC => '-I/usr/include/geotiff',
+    LIBS     => '-ltiff -lgeotiff';
 
-use Inline C => 'DATA',
-    VERSION => '0.05',
-    NAME => 'Image::GeoTIFF::Tiled'; 
+use Inline
+    C       => 'DATA',
+    VERSION => '0.07',
+    NAME    => 'Image::GeoTIFF::Tiled';
 
-sub _constrain_boundary {
-    my ( $self, $px_bound ) = @_;
+# my $ERR_KEY = '_tif_err';
+
+# SampleFormat
+# 1 = unsigned integer data
+# 2 = two’s complement signed integer data
+# 3 = IEEE floating point data [IEEE]
+# 4 = undefined data format
+#   - default = 1
+my %TEMPLATE = (
+    "8,1"  => 'C',
+    "8,2"  => 'c',
+    "16,1" => 'S',
+    "16,2" => 's',
+    "32,1" => 'I',
+    "32,2" => 'i',
+    # "64,1" => 'Q',
+    # "64,2" => 'q',
+    "32,3" => 'f',
+    "64,3" => 'd',
+);
+
+sub constrain_boundary {
+    my ( $self, @px_bound ) = @_;
+    my @constrained = @px_bound;
 
     # Round to nearest int
     for ( 0 .. 1 ) {
-        $px_bound->[ $_ ] = sprintf( "%.0f", $px_bound->[ $_ ] + .00001 );
+        $constrained[ $_ ] = sprintf( "%.0f", $constrained[ $_ ] + .00001 );
     }
-    for ( 2 .. 3 ) { $px_bound->[ $_ ] = int( $px_bound->[ $_ ] ); }
+    for ( 2 .. 3 ) { $constrained[ $_ ] = int( $constrained[ $_ ] ); }
+    
+    # @constrained[0,1] = map { int($_) } @constrained[0,1];
+    # @constrained[2,3] = map { int($_) + 1 } @constrained[2,3];
 
     # Check if it's completely outside the image
     if (
-        $px_bound->[ 0 ] >= $self->width        # min_x to the right
-        || $px_bound->[ 1 ] >= $self->length    # min_y below
-        || $px_bound->[ 2 ] < 0                 # max_x to the left
-        || $px_bound->[ 3 ] < 0
+        $constrained[ 0 ] >= $self->width        # min_x to the right
+        || $constrained[ 1 ] >= $self->length    # min_y below
+        || $constrained[ 2 ] < 0                 # max_x to the left
+        || $constrained[ 3 ] < 0
        )
-    {                                           # max_y above
-        return 0;
+    {                                            # max_y above
+        return;
     }
 
     # x_min
-    $px_bound->[ 0 ] = 0 if $px_bound->[ 0 ] < 0;
+    $constrained[ 0 ] = 0 if $constrained[ 0 ] < 0;
     # y_min
-    $px_bound->[ 1 ] = 0 if $px_bound->[ 1 ] < 0;
+    $constrained[ 1 ] = 0 if $constrained[ 1 ] < 0;
     # x_max
-    $px_bound->[ 2 ] = $self->width - 1 if $px_bound->[ 2 ] >= $self->width;
+    $constrained[ 2 ] = $self->width - 1 if $constrained[ 2 ] >= $self->width;
     # y_max
-    $px_bound->[ 3 ] = $self->length - 1 if $px_bound->[ 3 ] >= $self->length;
+    $constrained[ 3 ] = $self->length - 1 if $constrained[ 3 ] >= $self->length;
 
     # Check if the dimensions no longer make sense
-    if (   $px_bound->[ 0 ] > $px_bound->[ 2 ]
-        || $px_bound->[ 1 ] > $px_bound->[ 3 ] )
+    if (   $constrained[ 0 ] > $constrained[ 2 ]
+        || $constrained[ 1 ] > $constrained[ 3 ] )
     {
-        return 0;
+        return;
     }
 
-    1;
-} ## end sub _constrain_boundary
+    @constrained;
+} ## end sub constrain_boundary
 
 sub bounds {
-    my ($self,$proj) = @_;
+    my ( $self, $proj ) = @_;
     my ( $xmin, $ymax ) = $self->pix2proj( 0, 0 );
     my ( $xmax, $ymin ) = $self->pix2proj( $self->width, $self->length );
     if ( $proj ) {
-        ($ymax,$xmin) = $proj->inverse( $xmin, $ymax );
-        ($ymin,$xmax) = $proj->inverse( $xmax, $ymin );
+        ( $ymax, $xmin ) = $proj->inverse( $xmin, $ymax );
+        ( $ymin, $xmax ) = $proj->inverse( $xmax, $ymin );
     }
     ( $xmin, $ymin, $xmax, $ymax );
-}    
+}
+
+sub tile_area {
+    my $self = shift;
+    $self->tile_length * $self->tile_width;
+}
+
+sub get_tile {
+    my ( $self, $tile ) = @_;
+    my $bps      = $self->bits_per_sample;
+    my $fmt      = $self->sample_format || 1;
+    my $t = $TEMPLATE{ "$bps,$fmt" };
+    unless ($t) {
+        # $self->{$ERR_KEY} = 
+        carp "Couldn't find an unpack template for $bps BPS, format $fmt";
+        return;
+    }
+    [ unpack( $t . $self->tile_area, $self->get_raw_tile( $tile ) ) ];
+}
+
+sub get_tiles {
+    my $self = shift;
+    my ( $ul, $br ) =
+          @_ == 2 ? @_
+        : @_ == 4
+        ? $self->_pbound2corners(@_)
+        : confess "Unknown args: @_";
+    my $step = $self->tiles_across;
+    # Rectangle formed by ul/upper-left, br/bottom-right tiles
+    my $last_row = int( ( $br - $ul ) / $step );    # 0-indexed
+    my $last_col = ( $br - $ul ) % $step;           # 0-indexed
+    # print "ul: $ul, br: $br, last row: $last_row, last col: $last_col\n";
+    my @tiles;
+    for my $r ( 0 .. $last_row ) {
+        my @tile_row;
+        my $tr = $ul + $r * $step;
+        for my $c ( 0 .. $last_col ) {
+            push @tile_row, $self->get_tile( $tr + $c );
+        }
+        push @tiles, \@tile_row;
+    }
+    \@tiles;
+}
+
+# Pixel boundary 2 tile corners (ul,br)
+sub _pbound2corners {
+    my $self = shift;
+    confess "Unknown args: @_" unless @_ == 4;
+    my ($xmin,$ymin,$xmax,$ymax) = @_;
+    (
+        $self->pix2tile( $xmin, $ymin ),
+        $self->pix2tile( $xmax, $ymax )
+    );
+}
+
+# Pixel boundary to tile boundary (ul,ur,bl,br)
+sub _pbound2tbound {
+    my $self = shift;
+    confess "Unknown args: @_" unless @_ == 4;
+    my ($xmin,$ymin,$xmax,$ymax) = @_;
+    ( 
+        $self->pix2tile( $xmin, $ymin ),          # ul
+        $self->pix2tile( $xmax, $ymin ),          # ur
+        $self->pix2tile( $xmin, $ymax ),          # bl
+        $self->pix2tile( $xmax, $ymax )           # br
+    );
+}
+
+sub get_iterator_tile {
+    my ( $self, $tile ) = @_;
+    $self->get_iterator_pix(
+        $self->tile2pix( $tile, 0 ),
+        $self->tile2pix(
+            $tile, $self->tile_width * $self->tile_length - 1
+        )
+    );
+}
+
+sub tile2grid {
+    my $self = shift;
+    my $data = ref $_[0] ? $_[0] : $self->get_tile($_[0]);
+    my $across = $self->tile_width;
+    my @mat;
+    my $it = natatime $across, @$data;
+    while (my @vals = $it->()) {
+        push @mat, \@vals;
+    }
+    # [ map [ @$data[ $_ * $across .. $_ * $across + $across - 1 ] ], 0 .. $down - 1 ];
+    \@mat;
+}
+
+sub get_iterator_tiles {
+    # my ( $self, $ul, $br ) = @_;
+    my $self = shift;
+    my ( $ul, $br ) =
+          @_ == 2 ? @_ 
+        : @_ == 4 ? $self->_pbound2corners( @_ )
+        :           confess "Unknown args: @_";
+    my @px_bound = $self->constrain_boundary( 
+        $self->tile2pix( $ul, 0 ),
+        $self->tile2pix( $br, $self->tile_area - 1 ) 
+    );
+    # my $data = $self->extract_2D_array( @px_bound, undef );
+    # my $data = $self->get_tiles( $ul, $br );
+    # Image::GeoTIFF::Tiled::Iterator->new( {
+            # boundary => \@px_bound,
+            # buffer   => $self->tiles2grid( $data )
+        # }
+    # );
+    $self->get_iterator_pix(@px_bound);
+}
 
 sub get_iterator {
     my $self = shift;
-    return $self->get_iterator_shape(@_) if @_ == 1;
-    return $self->get_iterator_pix(@_) if @_ == 4;
+    if ( @_ == 1 ) {
+        return $self->get_iterator_shape( @_ ) if ref $_[ 0 ];
+        return $self->get_iterator_tile( @_ );
+    }
+    return $self->get_iterator_tiles( @_ ) if @_ == 2;
+    return $self->get_iterator_pix( @_ )   if @_ == 4;
     confess "Unknown args: @_";
 }
 
 sub get_iterator_shape {
-    my ($self,$shape) = @_;
-    croak "Need a Image::GeoTIFF::Tiled::Shape object" 
-        unless ref $shape and $shape->isa('Image::GeoTIFF::Tiled::Shape');
-    my @px_bound = ( $shape->boundary );
-    unless ( $self->_constrain_boundary(\@px_bound) ) {
-        return;
+    my ( $self, $shape, $proj ) = @_;
+    confess "No shape" unless $shape and ref $shape;
+    unless ( $shape->isa( 'Image::GeoTIFF::Tiled::Shape' ) ) {
+        $shape =
+            Image::GeoTIFF::Tiled::Shape->load_shape( $self, $shape, $proj );
     }
-    my $data = $self->extract_2D_array(@px_bound,$shape);
-    return Image::GeoTIFF::Tiled::Iterator->new({
-        # image => $self,
-        boundary => \@px_bound,
-        buffer => $data
-    });
+    my @px_bound = $self->constrain_boundary( $shape->boundary );
+    return unless @px_bound;
+    # print "Shape boundary: ",join(' ',$shape->boundary),"\n";
+    # print "Constrained boundary: @px_bound\n";
+    my $data = $self->extract_grid(@px_bound);
+    Image::GeoTIFF::Tiled::Iterator->new( {
+            boundary => \@px_bound,
+            buffer   => $self->filter_shape( $data, @px_bound[0,1], $shape )
+        }
+    );
 }
+
+sub filter_shape {
+    my ( $self, $data, $x0, $y0, $shape ) = @_;
+    # Ray-cast: replace outside data with undef
+    my $cols = @{ $data->[ 0 ] };
+    # print "Cols: $cols\n";
+    my @c_all = 0 .. $cols - 1;
+    for my $r ( 0 .. @$data - 1 ) {
+        my $x = int($x0) + 0.5;
+        my $y = $y0 + $r;
+        my $xvert     = $shape->get_x( $y );
+        unless ( @$xvert ) {
+            # undef the whole row
+            $data->[ $r ] = [ map undef, @c_all ];
+            next;
+        }
+        # print "x: $x, y: $y, xvert: @$xvert\n";
+        my $next_vert = shift @$xvert;
+        my $inside = 0; # Start outside shape
+        for my $c ( @c_all ) {
+            unless ( defined $next_vert ) {
+                # print "row, x = $r,$x\n";
+                confess "No next_vert yet still inside!" if $inside;
+                # undef rest of row
+                undef $data->[ $r ][ $_ ] for $c .. $cols - 1;
+                last;
+            }
+            # print "Next vertex: $next_vert\n";
+            while ( defined $next_vert and $x >= $next_vert ) {
+                $inside = $inside ? 0 : 1;    # switch state
+                $next_vert = shift @$xvert;
+            }
+            undef $data->[ $r ][ $c ] unless $inside;
+            $x++;
+        }
+        # print Dumper($data->[$r]),"\n";
+    } ## end for my $r ( 0 .. @$data...)
+    $data;
+} ## end sub extract_shape
+
+
+sub tiles2grid {
+    my $self = shift;
+    my $data = @_ == 2 ? $self->get_tiles(@_) : shift;
+    confess "Data not in 3D tiles"
+        unless ref $data
+            and ref $data             eq 'ARRAY'
+            and ref $data->[ 0 ]      eq 'ARRAY'
+            and ref $data->[ 0 ][ 0 ] eq 'ARRAY';
+  # my $data   = @_ == 1 ? shift : @_ == 2 || @_ == 4 ? $self->get_tiles( @_ ) :
+  # confess "Unknown args: @_";
+    my $across = $self->tile_width;
+    my @grid;
+    for my $row ( @$data ) {
+        my @its = map { natatime $across, @$_ } @$row;
+        push @grid, [ map $_->(), @its ] for 0 .. $across - 1;
+    }
+    \@grid;
+}
+
+sub _check_boundary {
+    my $self = shift;
+    for(grep $_ < 0, @_) {
+        # $self->{$ERR_KEY} = 
+        carp "Boundary (@_) out of range: < 0";
+        return 0;
+    }
+    my ($xmin,$ymin,$xmax,$ymax) = @_;          # User-defined boundary
+    my $width = $self->width;
+    if ( $xmin > $width or $xmax > $width ) {
+        # $self->{$ERR_KEY} = 
+        carp "Boundary (@_) out of range: image width ($width)";
+        return 0;
+    }
+    my $length = $self->length;
+    if ( $ymin > $length or $ymax > $length ) {
+        # $self->{$ERR_KEY} = 
+        carp "Boundary (@_) out of range: image length ($length)";
+        return 0;
+    }
+    1;
+}
+
+# sub tif_err {
+    # shift->{$ERR_KEY};
+# }
+
+sub extract_grid {
+    my $self = shift;
+    return unless $self->_check_boundary(@_);
+    my ($xmin,$ymin,$xmax,$ymax) = @_;          # User-defined boundary
+    my ($ul,$br) = $self->_pbound2corners(@_);
+    my $across = $self->tile_width;             # Pixels per tile row
+    my $down = $self->tile_length;
+    my $data =  $self->get_tiles($ul,$br);      # 3D tile data
+    my @grid;                                   # 2D tile grid
+    
+    # Only extract data in the pixel boundary from $data
+    my ($x0,$y0) = $self->tile2pix($ul,0);      # Data point 0
+    
+    # TILE[ROW][COL] = TILE[ROW * ACROSS + COL]
+    my $c_first = $xmin % $across;  # First pixel-row-col
+    my $c_last = $xmax % $across;   # Last pixel-row-col
+    for my $tr ( 0 .. @$data - 1 ) {
+        my $tiles = $data->[$tr];
+        # Tile iterators
+        my @iters = map { natatime $across, @$_ } @$tiles;
+        for my $gr ( 0 .. $down - 1 ) { # grid row
+            my $y = $y0 + $tr * $down + $gr;
+            unless ( $y >= $ymin and $y <= $ymax ) {
+                $_->() for @iters;      # skip data
+                next;
+            }
+            my @grid_row;
+            # First tile
+            {
+                my @tile_row = $iters[0]->();   # One row of pixels
+                if ( @iters == 1 ) {
+                    # only one tile across
+                    push @grid_row, @tile_row[$c_first..$c_last];
+                }
+                else {
+                    push @grid_row, @tile_row[$c_first..$across - 1];
+                }
+            }
+            # Middle tiles
+            for ( 1 .. @iters - 2 ) {
+                push @grid_row, $iters[$_]->();
+            }
+            # Last tile
+            if ( @iters > 1 ) {
+                my @tile_data = $iters[-1]->();
+                push @grid_row, @tile_data[0..$c_last];
+            }
+            push @grid, \@grid_row;
+        }
+        if ( my @vals = $iters[0]->() ) {
+            print Dumper \@grid;
+            confess "\nTile data left over:\n(@vals)\n";
+        }
+    }
+    \@grid;
+}   
+
+# DEFUNCT - WENT FROM 2D -> 2D
+# sub extract_grid {
+    # my $self = shift;
+    # my ($xmin,$ymin,$xmax,$ymax) = @_;
+    # my ($ul,$br) = $self->_pbound2corners(@_);
+    # my $data = 
+        # $self->tiles2grid($ul,$br);
+    # 
+    # # Replace outside data with undef
+    # my $cols  = @{$data->[0]};
+    # my ($x0,$y0) = $self->tile2pix($ul,0);
+    # my @c_first = 0 .. $xmin - $x0 - 1;
+    # my @c_last = $xmax - $x0 + 1 .. $cols - 1;
+    # my @c_all = 0..$cols - 1;
+    # for my $r ( 0 .. @$data - 1 ) {
+        # my $y = $y0 + $r;
+        # unless ( $y >= $ymin and $y <= $ymax ) {
+            # # skip the whole row
+            # $data->[$r] = [ map undef, @c_all ];
+        # }
+        # else {
+            # # undef the left and right side
+            # if ( @c_first ) {
+                # undef $data->[$r][$_] for @c_first;
+            # }
+            # if ( @c_last ) {
+                # undef $data->[$r][$_] for @c_last;
+            # }
+        # }
+    # }
+    # $data;
+# }
 
 sub get_iterator_pix {
-    my ($self,@px_bound) = @_;
-    unless ( $self->_constrain_boundary(\@px_bound) ) {
-        return;
-    }
-    my $data = $self->extract_2D_array(@px_bound,undef);
-    return Image::GeoTIFF::Tiled::Iterator->new({
-        # image => $self,
-        boundary => \@px_bound,
-        buffer => $data
-    });
+    my $self     = shift;
+    my @px_bound = $self->constrain_boundary( @_ );
+    return unless @px_bound;
+    Image::GeoTIFF::Tiled::Iterator->new( {
+            boundary => \@px_bound,
+            buffer   => $self->extract_grid(@px_bound)
+        }
+    );
 }
+ 
+     # my ($ul,$ur,$bl,$br) = 
+        # $self->_pbound2tbound($xmin,$ymin,$xmax,$ymax);
+    # my $across = $ur - $ul + 1;
+    # my $down = int(($bl - $ul) / $self->tiles_across) + 1;
+    # my $ur = $self->pix2tile($xmax,$ymin) - $ul;
+    # my $bl = 
+        # int(($self->pix2tile($xmin,$ymax) - $ul) / $self->tiles_across) + 1;
+    # my ($tile_ur,$tile_bl) = $self->_opposite_corners($tile_ul,$tile_br);
+    
 
 sub dump_tile {
-    my ($self,$tile) = @_;
+    my ( $self, $tile ) = @_;
     croak "No tile specified" unless defined $tile;
-    my $buffer = $self->get_tile($tile);
-    local $| = 1;
-    for ( 0 .. $self->tile_size - 1 ) {
-        printf("%03i", $buffer->[$_]);
-        if ( ($_ + 1) % ($self->tile_width) == 0) {
-            print("\n");
+    my $buffer = $self->get_tile( $tile );
+    STDOUT->flush();
+    for ( 0 .. $self->tile_width * $self->tile_length - 1 ) {
+        printf( "%6s", sprintf( "%.1f", $buffer->[ $_ ] ) );
+        if ( ( $_ + 1 ) % ( $self->tile_width ) == 0 ) {
+            print( "\n" );
         }
         else {
-            print(" ");
+            print( " " );
         }
     }
 }
@@ -132,23 +460,80 @@ __C__
 #define DEBUG 0
 
 typedef struct {
-    const char *file;       // Filename
-    TIFF *xtif;             // TIFF image handle
-    GTIF *gtif;             // GeoTIFF image handle
-    uint32 length, width;   // Image length, width in pixels
+    const char *file;           // Filename
+    TIFF *xtif;                 // TIFF image handle
+    GTIF *gtif;                 // GeoTIFF image handle
+    uint16 bits_per_sample;     // Bits per pixel
+    uint16 sample_format;       // Data Type
+    uint32 length, width;       // Image length, width in pixels
     uint32 tile_length, tile_width;
-                            // Tile length, width in pixels
-    tsize_t tile_size;      // Tile size (bytes)
-    int tile_step;          // # of tiles per row
+                                // Tile length, width in pixels
+    tsize_t tile_size;          // Tile size (bytes)
+    tsize_t tile_row_size;      // Tile row size (bytes)        
+//    uint32 tile_byte_counts;    // Tile size (compressed bytes)
+    uint32 tile_step;           // no. of tiles per row (A)croak("TIFFGetField error: TIFFTAG_BITSPERSAMPLE");
+    uint32 tiles_across;        // no. of tiles per row (B)
+    uint32 tiles_down;          // no. of tiles per col
+    uint32 tiles_total;         // no. of tiles (computed)
+    ttile_t number_of_tiles;    // no. of tiles (libtiff)
 } Image;
 
+static void _read_meta(Image*);
 static void _center_pixel(double * x, double * y);
 static void _verify_image(Image*);
-static void _read_meta(Image*);
 static void _print_meta(Image*);
-static int _get_state(int,double,double*,double*,int,int*);
-//static int _constrain_boundary(Image*,int*);
+
+//--------------------------------------------------------------------------------------------------
+// METADATA
+
+static void _read_meta(Image* image) {
+    uint32 width, length, t_width, t_length;
+//    uint32 t_byte;
+    uint16 bps,fmt;
     
+    // Zero-init
+    width = length = t_width = t_length = 0;
+    bps = fmt = 0;
+    
+    if ( TIFFGetField(image->xtif,TIFFTAG_BITSPERSAMPLE,&bps) != 1 )
+        croak("TIFFGetField error: TIFFTAG_BITSPERSAMPLE");
+    if ( TIFFGetFieldDefaulted(image->xtif, TIFFTAG_SAMPLEFORMAT, &fmt) != 1 )
+        croak("TIFFGetField error: TIFFTAG_SAMPLEFORMAT");
+    image->bits_per_sample = bps;
+    image->sample_format = fmt;
+    
+    if ( TIFFGetField(image->xtif,TIFFTAG_IMAGELENGTH,&length) != 1 )
+        croak("TIFFGetField error: TIFFTAG_IMAGELENGTH");
+    if ( TIFFGetField(image->xtif,TIFFTAG_IMAGEWIDTH,&width) != 1 )
+        croak("TIFFGetField error: TIFFTAG_IMAGEWIDTH");
+    image->length = length;
+    image->width  = width;
+
+    if ( TIFFGetField(image->xtif,TIFFTAG_TILELENGTH,&t_length) != 1 )
+        croak("TIFFGetField error: TIFFTAG_TILELENGTH");
+    if ( TIFFGetField(image->xtif,TIFFTAG_TILEWIDTH,&t_width) != 1 )
+        croak("TIFFGetField error: TIFFTAG_TILEWIDTH");
+    image->tile_width = t_width;
+    image->tile_length = t_length;
+        
+/*    if ( TIFFGetField(image->xtif,TIFFTAG_TILEBYTECOUNTS,&t_byte) != 1 )
+        croak("TIFFGetField error: TIFFTAG_TILEBYTECOUNTS");
+    image->tile_byte_counts = t_byte; */
+
+    image->tile_size = TIFFTileSize(image->xtif);
+    image->tile_row_size = TIFFTileRowSize(image->xtif);
+    image->number_of_tiles = TIFFNumberOfTiles(image->xtif);
+    
+    image->tile_step = 
+        TIFFComputeTile( image->xtif, 0, image->tile_length, 0, 0 );
+    image->tiles_across = (image->width + image->tile_width - 1)/image->tile_width;
+    image->tiles_down = (image->length + image->tile_length - 1)/image->tile_length;
+    image->tiles_total = image->tiles_across * image->tiles_down;
+    
+    if ( DEBUG >= 1 )
+        _print_meta(image);
+}
+
 //--------------------------------------------------------------------------------------------------
 // COORDINATE-PIXEL TRANSFORMATIONS
 
@@ -266,47 +651,53 @@ void proj2pix_boundary(SV* obj, SV* svx_min, SV* svy_min, SV* svx_max, SV* svy_m
 
 static void _verify_image(Image* image) {
     // Check that it is of a type that we support - if not throw errors
-    uint16 bps, spp;
-    if ( (TIFFGetField(image->xtif, TIFFTAG_BITSPERSAMPLE, &bps) == 0) || (bps != 8) )
-        croak("Either undefined or unsupported number of bits per sample.");
-    if ( (TIFFGetField(image->xtif, TIFFTAG_SAMPLESPERPIXEL, &spp) == 0) || (spp != 1) )
-        croak("Either undefined or unsupported number of samples per pixel.");
+    uint16 bps, spp, fmt;
+    bps = image->bits_per_sample;
+    fmt = image->sample_format;
+    if ( bps == 0 || bps < 8 || bps > 32 ) {
+        printf("Bits-per-sample: %d\n",bps);
+        croak("Either undefined (0) or unsupported (<8 or >32) number of bits per sample.");
+    }
+    if ( fmt == 3 && bps == 32 && sizeof(float) != 4 ) {
+        printf("sizeof(float) = %d\n",sizeof(float));
+        croak("Image data stored in 32-bit floating point - your machine doesn't match! Help!");
+    }
+    TIFFGetField(image->xtif, TIFFTAG_SAMPLESPERPIXEL, &spp);
+    if ( (spp == 0) || (spp != 1) ) {
+        printf("Samples-per-pixel: %d\n",spp);
+        croak("Either undefined (0) or unsupported (!=1) number of samples per pixel.");
+    }
+    
     // TODO: relax this condition?
     if ( TIFFIsTiled(image->xtif) == 0 )
-        croak("Image must be tiled.");
-}
-
-static void _read_meta(Image* image) {
-    uint32 width0, length0;
-    uint32 width1, length1;
-    uint32 tilebyte0;
-    uint32 tilebyte;
-    
-    TIFFGetField(image->xtif,TIFFTAG_IMAGELENGTH,&length0);
-    TIFFGetField(image->xtif,TIFFTAG_IMAGELENGTH,&length1);
-    TIFFGetField(image->xtif,TIFFTAG_IMAGEWIDTH,&width0);
-    TIFFGetField(image->xtif,TIFFTAG_IMAGEWIDTH,&width1);
-    image->length = length0;
-    image->width = width0;
-    TIFFGetField(image->xtif,TIFFTAG_TILEBYTECOUNTS,&tilebyte0);
-    TIFFGetField(image->xtif,TIFFTAG_TILEBYTECOUNTS,&tilebyte);
-    TIFFGetField( image->xtif,TIFFTAG_TILELENGTH,&(image->tile_length) );
-    TIFFGetField( image->xtif,TIFFTAG_TILEWIDTH,&(image->tile_width) );
-    image->tile_size = TIFFTileSize(image->xtif) * sizeof(char);
-    image->tile_step = 
-        TIFFComputeTile( image->xtif, 0, image->tile_length, 0, 0 );
-    if ( DEBUG >= 1 )
-        _print_meta(image);
+        croak("Image must be tiled!");
 }
 
 static void _print_meta(Image* image) {
-//  printf("\n");
-    printf("Image length x width: %i x %i\n",image->length,image->width);
-    printf("Tiles in image: %d\n",TIFFNumberOfTiles(image->xtif));
-    printf("Tile length x width: %d x %d\n",image->tile_length,image->tile_width);
-    printf("Tile row size (bytes): %d\n",TIFFTileRowSize(image->xtif));
-    printf("Tile size: %d\n",image->tile_size);
-    printf("Tile # at pixel (0,%d): %d\n",image->tile_length,image->tile_step);
+    printf("File: %s\n",(char*)image->file);
+    printf("Image width x length: %d x %d\n",
+            image->width,image->length);
+    printf("Bits per sample (format): %d (%d)\n",
+            image->bits_per_sample,image->sample_format);
+    printf("Tile width x length: %d x %d = %d pixels\n",
+            image->tile_width,image->tile_length,
+            image->tile_width*image->tile_length);
+    printf("Tile # at pixel (0,%d): %d\n",
+            image->tile_length,image->tile_step);
+    printf("Tile # at pixel (%d,%d): %d\n",
+            image->width-1,image->length-1,
+            TIFFComputeTile(
+                image->xtif,image->width-1,image->length-1,0,0 )
+            );
+    printf("Tiles across * down = total: %d * %d = %d\n",
+            image->tiles_across, image->tiles_down, image->tiles_total );
+    printf("Number of tiles (libtiff): %d\n",
+            image->number_of_tiles);
+    printf("Tile size (row size): %d (%d)\n",
+            image->tile_size,image->tile_row_size);
+    /*
+    printf("Tile compressed byte-count: %d\n",
+            image->tile_byte_counts); */
     printf("\n");
 }
 
@@ -318,24 +709,7 @@ void print_meta(SV* obj) {
 //--------------------------------------------------------------------------------------------------
 // TILE
 
-int get_tile_pix(SV* obj, double x, double y) {
-    // Computes the tile # corresonding to a given pixel coordinates
-    int tile;
-    Image* image = (Image*)SvIV(SvRV(obj));
-    
-    if ( DEBUG == 2 )
-        printf( "Getting tile # for pixel coordinates (%.f,%.f): ", x, y );
-        
-    // Get the tile #
-    tile = TIFFComputeTile( image->xtif, x, y, 0, 0 );
-    
-    if ( DEBUG == 2 )
-        printf("%d\n",tile);
-    
-    return tile;
-}
-
-void set_pix_tile(SV* obj, int tile, int i, SV* svx, SV* svy) {
+void tile2pix_m(SV* obj, int tile, int i, SV* svx, SV* svy) {
     // Given a tile # and index, calculate pixel coordinates (MUTATIVE)
     Image* image = (Image*)SvIV(SvRV(obj));
     double x = (double)SvNV(svx);
@@ -358,14 +732,14 @@ void set_pix_tile(SV* obj, int tile, int i, SV* svx, SV* svy) {
     sv_setnv(svy,y);    
 }
 
-void get_pix_tile(SV* obj, int tile, int i) {
+void tile2pix(SV* obj, int tile, int i) {
     // Given a tile # and index, calculate pixel coordinates (TRANSFORMATIVE)
     Inline_Stack_Vars;
     SV* svx = newSVnv( (double)0 );
     SV* svy = newSVnv( (double)0 );
     
     // Do the mutative operation
-    set_pix_tile( obj, tile, i, svx, svy );
+    tile2pix_m( obj, tile, i, svx, svy );
     
     // Push the values of svx, svy onto the stack and return them
     Inline_Stack_Reset;
@@ -374,73 +748,66 @@ void get_pix_tile(SV* obj, int tile, int i) {
     Inline_Stack_Done;
 }
 
+// Computes the tile no. corresonding to a given pixel coordinates
+int pix2tile(SV* obj, double x, double y) {
+    int tile;
+    Image* image = (Image*)SvIV(SvRV(obj));
+    
+    if ( DEBUG == 2 )
+        printf( "Getting tile # for pixel coordinates (%.f,%.f): ", x, y );
+        
+    // Get the tile #
+    tile = TIFFComputeTile( image->xtif, x, y, 0, 0 );
+    
+    if ( DEBUG == 2 )
+        printf("%d\n",tile);
+    
+    return tile;
+}
+
 // Given pixel coordinates, calculate the index into its tile
-int get_pix_idx(SV* obj, double dpx, double dpy) {
+int pix2tileidx(SV* obj, double dpx, double dpy) {
     Image* image = (Image*)SvIV(SvRV(obj));
     int px = (int)dpx;
     int py = (int)dpy;
-    int idx_row = ( py - (py / image->tile_length) * image->tile_length ) * image->tile_length;
-                                                            // first pixel index in the UL tile row (tile[y_min][0])
+    int idx_row = 
+        ( py - (py / image->tile_length) * image->tile_length ) 
+            * image->tile_length;       // first pixel index in the UL tile row (tile[y_min][0])
     return idx_row + (px % image->tile_width);
-                                                            // UL boundary pixel index (tile[y_min][x_min])
+                                        // UL boundary pixel index (tile[y_min][x_min])
 }
 
 //--------------------------------------------------------------------------------------------------
 // DATA
 
-SV* get_tile(SV* obj, int tile) {
+SV* get_raw_tile(SV* obj, int tile) {
     Image* image;
-    uint32 i;
-    SV* buffer;
-	image = (Image*)SvIV(SvRV(obj));
-	// Read in char* buffer
-	buffer = newSV(image->tile_size);
+    tdata_t buffer;
+    SV* sv_buf;
+    int ret;
+    image = (Image*)SvIV(SvRV(obj));
+    
+    // Read in buffer
+    buffer = _TIFFmalloc(image->tile_size);
+    if ( buffer == NULL )
+        croak("Unable to allocate buffer (_TIFFmalloc).");
+    _TIFFmemset(buffer,0,image->tile_size);
 
-//    if ( TIFFReadRawTile( image->xtif, tile, (char *)SvPVX(buffer), image->tile_size ) == -1 )
-    if ( TIFFReadEncodedTile( image->xtif, tile, (char *)SvPVX(buffer), image->tile_size ) == -1 )
-        croak("Read error on tile.");
+    ret =
+        TIFFReadEncodedTile( 
+            image->xtif, 
+            tile, 
+            buffer,
+            image->tile_size );
+    if ( ret == -1 )
+        croak("Read error on tile (TIFFReadEncodedTile).");
 
-    // Copy buffer into array
-    AV* array = newAV();
-    av_extend( array, image->tile_size - 1 );
-	for ( i = 0; i < image->tile_size; i++ ) {
-        if ( DEBUG >= 1 )
-    		printf("%i/%i: %i\n",i,image->tile_size-1,((char *)SvPVX(buffer))[i]);
-        if ( av_store( array, i, newSViv( ((char *)SvPVX(buffer))[i] ) ) == NULL ) {
-            croak("Couldn't store buffer value in array.");
-    	}
-    }
-    // FREE THE BUFFER!
-	SvREFCNT_dec(buffer);
-
-    return newRV_noinc((SV*)array);
+    sv_buf = newSVpv(buffer,image->tile_size);
+    _TIFFfree(buffer);
+    
+    return sv_buf;
 }
 
-SV* get_tiles(SV* obj, int ul_tile, int br_tile) {
-    // 3D array of tile data
-    Image* image = (Image*)SvIV(SvRV(obj));
-    int tile_rows = (br_tile - ul_tile) / image->tile_step + 1;
-    int tile_cols = (br_tile - ul_tile) % image->tile_step + 1;
-    int r,c,tr;
-    AV* tile_buffer;
-    AV* tile_row;
-    tile_buffer = newAV();      	// Stores tile row AV's (3D)
-    av_extend( tile_buffer, tile_rows - 1 );
-    // Fill the tile buffer
-    for ( r = 0; r < tile_rows; r++ ) {
-        tile_row = newAV();         // Stores tiles in a tile row
-        av_extend( tile_row, tile_cols - 1 );
-        // The starting tile # of the row (get from ul_tile)
-        tr = ul_tile + r * image->tile_step;
-        for ( c = 0; c < tile_cols; c++ ) {
-            if ( av_store( tile_row, c, get_tile(obj,(tr + c)) ) == NULL )
-                croak("Couldn't store buffer arrayref in tile_row array.");
-        }
-        if ( av_store( tile_buffer, r, newRV_noinc((SV*)tile_row) ) == NULL )
-            croak("Couldn't store tile_row arrayref in tile_buffer.");
-    }
-	return newRV_noinc((SV*)tile_buffer);
-}
 
 //--------------------------------------------------------------------------------------------------
 // ITERATION
@@ -451,283 +818,11 @@ void print_refcnt(SV* ref) {
             (int)SvREFCNT(ref),(int)SvREFCNT((SV*)SvRV(ref)) );
 }
 
-SV* _get_x_values(SV* shape, double y) {
-    SV* x_values;
-    int count;
-    int i;
-    dSP;
-    PUSHMARK(SP);
-    XPUSHs(shape);
-    XPUSHs(sv_2mortal(newSVnv(y)));
-    PUTBACK;
-    count = call_method( "Image::GeoTIFF::Tiled::Shape::get_x", G_SCALAR );
-    SPAGAIN;
-    if ( count != 1 )
-        croak("Image::GeoTIFF::Tiled::Shape::get_x didn't return a sole value.");
-    x_values = POPs;
-    PUTBACK;
-
-    if ( SvTYPE(SvRV(x_values)) != SVt_PVAV )
-        croak("Image::GeoTIFF::Tiled::Shape::get_x didn't return a reference to an array.");
-    if ( DEBUG >= 1 ) {
-        print_refcnt(x_values);
-        printf("x_values at latitude %.1f: ",y);
-        for ( i = 0; i < (int)(av_len( (AV*)SvRV(x_values) )) + 1; i++ )
-            printf("%.2f ", SvNV((SV*)*av_fetch( (AV*)SvRV(x_values), i, 0 )));
-        printf("\n");
-    }
-    return x_values;
-}
-
-static int _get_state(int old_state, double px, double* next_x, double* x_values, int xv_length, int* x_idx) {
-    // First see if there's any x values left to check
-    if ( *x_idx >= xv_length ) {
-        if ( DEBUG >= 1 )
-            printf("x_idx > length(x_values), returning %i\n",old_state);
-        return old_state;
-    }
-    
-    if ( DEBUG >= 1 ) {
-        printf("State: %i; px: %.2f; x-value[%i]: %.2f\n",old_state,px,*x_idx,*next_x);
-    }
-    
-    // Check if the middle of the pixel is to the right of the value
-    if ( px >= *next_x ) {
-        if ( DEBUG >= 1 )
-            printf("px >= next_x\n");
-        // Increment x index and fetch next x
-        *x_idx = *x_idx + 1;
-        if ( *x_idx <= xv_length ) {
-            *next_x = x_values[*x_idx];
-        }
-        // Change state and recurse
-        if ( old_state == 0 )
-            return _get_state(1,px,next_x,x_values,xv_length,x_idx);
-        else
-            return _get_state(0,px,next_x,x_values,xv_length,x_idx);
-    }
-    else {
-        if ( DEBUG >= 1 )
-            printf("px < next_x, returning %i\n",old_state);
-        return old_state;
-    }
-}
-
-
-SV* extract_2D_array(SV* obj, SV* svx_min, SV* svy_min, SV* svx_max, SV* svy_max, SV* shape) {
-//SV* extract_2D_array(SV* obj, SV* svx_min, SV* tile_buffer, SV* shape) { 
-    Image* image = (Image*)SvIV(SvRV(obj));
-    // Iteration local vars
-    int ul_tile, br_tile;
-    int rows,cols,tile_rows,tile_cols;
-    int idx_row,idx_beg,idx_end;
-    int i,r,c,tx,ty;
-    // State-machine vars
-    int shape_OK;                       // Flag to constrain pixels to shape
-    int state;                          // Current state - either OUTSIDE(0) or INSIDE(1)
-    SV* x_values;                       // Returned from Image::GeoTIFF::Tiled::Shape::get_x
-    double* dx_values;                  // Copy of x_values
-    int xv_length;                      // Array length of x_values
-    double px,py;                       // Current pixel coordinate
-    double next_x;                      // "Next" x_value in current latitude
-    int x_idx;                          // Current index into x_values array
-
-    // Data structures
-    SV* tile_buffer;                    // Temp: Entire tile data		3D
-    AV* tile_row;                       // Temp: A row of tile data		2D
-    AV* data;                           // Temp: A tile of data			1D
-    AV* buffer_row;                     // One row of buffered data
-    AV* buffer = newAV();               // 2D array of buffer_row's (return data)
-    
-    if ( DEBUG >= 1 ) {
-        printf( "Extracting 2D array of boundary (%.2f,%.2f,%.2f,%.2f)\n",
-        	SvNV(svx_min),SvNV(svy_min),SvNV(svx_max),SvNV(svy_max) );
-    }
-       
-    ul_tile = 
-        get_tile_pix( obj, (double)SvNV(svx_min), (double)SvNV(svy_min) );
-                                                            // x_min, y_min
-    br_tile = 
-        get_tile_pix( obj, (double)SvNV(svx_max), (double)SvNV(svy_max) );
-                                                            // x_max, y_max
-    tile_buffer = get_tiles(obj,ul_tile,br_tile);           // 3D tile data
-    
-    rows = (int)SvIV(svy_max) - (int)SvIV(svy_min) + 1;     // Pixel rows ( inclusive; y_max - y_min + 1 )
-    av_extend( buffer, rows - 1 );
-    cols = (int)SvIV(svx_max) - (int)SvIV(svx_min) + 1;     // Pixel cols ( inclusive; x_max - x_min + 1 )
-    tile_rows = (br_tile - ul_tile) / image->tile_step + 1;
-    tile_cols = (br_tile - ul_tile) % image->tile_step + 1;
-    idx_row = 
-        ( (int)SvIV(svy_min) - ((int)SvIV(svy_min) / image->tile_length) * image->tile_length ) * image->tile_length;
-                                                            // first pixel index in the UL tile row (tile[y_min][0])
-    idx_beg = idx_row + ((int)SvIV(svx_min) % image->tile_width);
-                                                            // UL boundary pixel index (tile[y_min][x_min])
-    idx_end = idx_row + ((int)SvIV(svx_max) % image->tile_width);
-                                                            // UR boundary pixel index (tile[y_min][x_max])
-    // Test if we're confining to a shape
-    if ( sv_isobject(shape) && sv_isa(shape,"Image::GeoTIFF::Tiled::Shape") ) {
-        // We ARE using a state machine
-        shape_OK = 1;
-        x_idx = 0;
-        // Set the first pixel coordinate
-        px = SvNV(svx_min) + 0.5;
-        py = SvNV(svy_min) + 0.5;
-        if ( DEBUG >= 1 )
-            printf("Starting pixel coordinate: (%.1f,%.1f)\n",px,py);
-    }
-    else {
-        // We're NOT using a state machine
-        shape_OK = 0;
-    }
-    
-    if ( DEBUG >= 1 ) {
-        setvbuf(stdout, NULL, _IONBF, 0);   // autoflush
-        printf("Starting pixel index: %d\nEnding pixel index: %d\nFirst pixel in row: %d\nRow step: %d\nTotal rows|cols: %i|%i\n",
-            idx_beg,idx_end,idx_row,image->tile_length,rows,cols);
-    }
-
-//     Note:
-//     cols = (idx_row + 64 - idx_beg)            First tile
-//                + (64 * _min((tile_cols - 2),0) Middle tiles
-//                + (idx_end - idx_row)           Last tile
-//     ex. 
-//        Buffer (rows,cols): (50,51)
-//        Starting pixel index: 1647
-//        Ending pixel index: 1634
-//        First pixel in row: 1600
-//        51 = 1600 + 64 - 1647 + 64 * 0 + 1634 - 1600
-    
-    tx = 0;
-    for ( r = 0; r < rows; r++ ) {
-        // WITHIN PIXEL ROW
-        
-//         - ex. Tiles are flattened 64 x 64 pixel grids
-//            - index row given by idx / 64
-//            - index col given by idx % 64
-        c = 0;          // current buffer column index
-        ty = 0;         // current tile_buffer column index (2nd dimension)
-        
-        buffer_row = newAV();               // Stores all pixel data on row (pixel latitude)
-        av_extend( buffer_row, cols - 1 );
-        
-        if ( shape_OK ) {
-            state = 0;
-            x_idx = 0;
-            x_values = _get_x_values(shape,py);    // Change state whenever we cross any of these guys
-            xv_length = av_len( (AV*)SvRV(x_values) ) + 1;
-            // Allocate and copy x_values into double* dx_values
-//            Newx(dx_values,xv_length,double);
-            New(42,dx_values,xv_length,double);
-            for ( i = 0; i < xv_length; i++ ) {
-                dx_values[i] = (double)SvNV( (SV*)*av_fetch((AV*)SvRV(x_values), i, 0) ); 
-            }
-            if ( av_len( (AV*)SvRV(x_values) ) != -1 ) {
-                next_x = (double)SvNV( (SV*)*av_fetch((AV*)SvRV(x_values), 0, 0) );
-            }
-        }
-        
-        // First tile: start somewhere in the idx_row
-        for ( i = idx_beg; ( ty < tile_cols - 1 || i <= idx_end ) && i < idx_row + image->tile_width; i++ ) {
-//          Fetch tile_buffer[tx][ty][i]:
-            tile_row = (AV*)SvRV( *av_fetch( (AV*)SvRV(tile_buffer), tx, 0 ) );
-            data = (AV*)SvRV( *av_fetch( tile_row, ty, 0 ) );
-            // Update state machine
-            if ( shape_OK ) {
-                state = _get_state( state, px, &next_x, dx_values, xv_length, &x_idx );
-                px++;
-            }
-            if ( shape_OK && state == 0 ) {
-                av_store( buffer_row, c++, newSViv(-1) );
-            }
-            else {
-                av_store( buffer_row, c++, newSVsv((SV*)*av_fetch(data,i,0)) );
-            }
-        }
-        
-        // Middle tiles: get entire idx_row (skipped if tile_cols < 3)
-        for ( ty = 1; ty < tile_cols - 1; ty++ ) {
-            for ( i = idx_row; i < idx_row + image->tile_width; i++ ) {
-//              Fetch tile_buffer[tx][ty][i]:
-                tile_row = (AV*)SvRV( *av_fetch( (AV*)SvRV(tile_buffer), tx, 0 ) );
-                data = (AV*)SvRV( *av_fetch(tile_row,ty,0) );
-                // Update state machine
-                if ( shape_OK ) {
-                    state = _get_state( state, px, &next_x, dx_values, xv_length, &x_idx );
-                    px++;
-                }
-                if ( shape_OK && state == 0 ) {
-                    av_store( buffer_row, c++, newSViv(-1) );
-                }
-                else {
-                    av_store( buffer_row, c++, newSVsv((SV*)*av_fetch(data,i,0)) );
-                }
-            }
-        }
-        
-        // Last tile: end in middle somewhere (skipped if tile_cols = 1)
-        if ( tile_cols > 1 ) {
-            for ( i = idx_row; i <= idx_end; i++ ) {
-//              Fetch tile_buffer[tx][tile_cols-1][i]:
-                tile_row = (AV*)SvRV( *av_fetch( (AV*)SvRV(tile_buffer), tx, 0 ) );
-                data = (AV*)SvRV( *av_fetch(tile_row, tile_cols-1, 0) );
-                // Update state machine
-                if ( shape_OK ) {
-                    state = _get_state( state, px, &next_x, dx_values, xv_length, &x_idx );
-                    px++;
-                }
-                if ( shape_OK && state == 0 ) {
-                    av_store( buffer_row, c++, newSViv(-1) );
-                }
-                else {
-                    av_store( buffer_row, c++, newSVsv((SV*)*av_fetch(data,i,0)) );
-                }
-            }
-        }
-        
-        // Note: at this point c = cols, hopefully
-        if ( c != cols ) {
-            printf("c: %d\tcols: %d\n",c,cols);
-            croak("Buffer read error: c != cols (fix this!)");
-        }
-        
-        // Store the buffer_row
-		if ( av_store( buffer, r, newRV_noinc((SV*)buffer_row) ) == NULL )
-            croak("Couldn't store buffer_row arrayref in 2D buffer array.");
-        
-        // Next row indexes
-        if ( idx_row == image->tile_size - image->tile_width ) {
-            // We've reached the last index row in the current tile buffer row
-            tx++;    // increment tile_buffer row
-            idx_beg = idx_beg % image->tile_width;
-            idx_row = 0;
-            idx_end = idx_end % image->tile_width;
-        }
-        else {
-            // We're still in the middle of a tile
-            idx_beg += image->tile_length;
-            idx_row += image->tile_length;
-            idx_end += image->tile_length;
-        }
-        if ( shape_OK ) {
-            // Reset pixel column
-            px = (double)SvNV(svx_min) + 0.5;
-            // Increment the pixel row
-            py++;
-            // Free temps
-            Safefree(dx_values);
-        }
-    }
-    // FREE tile_buffer (3D Tile Data)
-    SvREFCNT_dec(tile_buffer);
-
-	return newRV_noinc((SV*)buffer);
-}
-
 //--------------------------------------------------------------------------------------------------
 // GETTERS
 
 char* file(SV* obj) {
-    return ((Image*)SvIV(SvRV(obj)))->file;
+    return (char*)(((Image*)SvIV(SvRV(obj)))->file);
 }
 int length(SV* obj) {
     return ((Image*)SvIV(SvRV(obj)))->length;
@@ -744,8 +839,34 @@ int tile_width(SV* obj) {
 int tile_size(SV* obj) {
     return ((Image*)SvIV(SvRV(obj)))->tile_size;
 }
+int tile_row_size(SV* obj) {
+    return ((Image*)SvIV(SvRV(obj)))->tile_row_size;
+}
+/*
+int tile_byte_counts(SV* obj) {
+    return ((Image*)SvIV(SvRV(obj)))->tile_byte_counts;
+}
+*/
 int tile_step(SV* obj) {
     return ((Image*)SvIV(SvRV(obj)))->tile_step;
+}
+int tiles_across(SV* obj) {
+    return ((Image*)SvIV(SvRV(obj)))->tiles_across;
+}
+int tiles_down(SV* obj) {
+    return ((Image*)SvIV(SvRV(obj)))->tiles_down;
+}
+int tiles_total(SV* obj) {
+    return ((Image*)SvIV(SvRV(obj)))->tiles_total;
+}
+int number_of_tiles(SV* obj) {
+    return ((Image*)SvIV(SvRV(obj)))->number_of_tiles;
+}
+int bits_per_sample(SV* obj) {
+    return ((Image*)SvIV(SvRV(obj)))->bits_per_sample;
+}
+int sample_format(SV* obj) {
+    return ((Image*)SvIV(SvRV(obj)))->sample_format;
 }
 
 //--------------------------------------------------------------------------------------------------
@@ -769,8 +890,10 @@ SV* new( char* class, const char* file ) {
     if ( (image->gtif = GTIFNew(image->xtif)) == NULL )
         croak("Could not read geotiff data on image.");
     
-    _verify_image(image);
+    if ( DEBUG ) setvbuf(stdout, NULL, _IONBF, 0);   // autoflush
+
     _read_meta(image);
+    _verify_image(image);
     
     sv_setiv(obj, (IV)image);
     SvREADONLY_on(obj);
