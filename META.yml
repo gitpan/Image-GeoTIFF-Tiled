@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Image-GeoTIFF-Tiled
-version:            0.07
+version:            0.08
 abstract:           Read data and extract shapes from tiled GeoTIFF rasters
 author:
     - Blake Willmarth <bwillmarth@gmail.com>

@@ -30,7 +30,7 @@ my $proj  = Geo::Proj4->new( "+proj=utm +zone=17 +ellps=WGS84 +units=m" )
 my $shp       = Geo::ShapeFile->new( './t/samples/usgs1_poly' );
 my $shp_shape = $shp->get_shp_record( 1 );
 my $shape =
-    Image::GeoTIFF::Tiled::Shape->load_shape( $image, $proj, $shp_shape );
+    Image::GeoTIFF::Tiled::Shape->load_shape( $image, $shp_shape, $proj );
 my $iter = $image->get_iterator( $shape );
 
 # $iter->dump_buffer;     die;

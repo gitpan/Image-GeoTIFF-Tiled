@@ -1,11 +1,11 @@
 #!/usr/bin/perl
 use strict;
 use warnings;
-use Test::More tests => 20;
+use Test::More tests => 22;
 use Image::GeoTIFF::Tiled;
 
 # Test projected <-> pixel translations
-my $exp = {
+my %exp = (
     # Found using listgeo utility
     './t/samples/usgs1_.tif' => {
         # upper_left => [ '730232.510', 4557035.327 ],
@@ -31,30 +31,36 @@ my $exp = {
         lower_right => [ 709757.992, 4547714.558 ],
         center      => [ 707500.034, 4549659.182 ]
     },
-};
+);
 
-for my $tiff ( keys %$exp ) {
+for my $tiff ( keys %exp ) {
     my $image  = Image::GeoTIFF::Tiled->new( $tiff );
     my $w      = $image->width;
     my $l      = $image->length;
     my %lookup = (
         upper_left  => [ 0,      0 ],
-        lower_left  => [ 0,      $l ],
         upper_right => [ $w,     0 ],
         lower_right => [ $w,     $l ],
+        lower_left  => [ 0,      $l ],
         center      => [ $w / 2, $l / 2 ]
     );
-    for my $loc ( keys %lookup ) {
-        my $coord = [ map { sprintf( "%.1f", $_ ) } @{ $lookup{ $loc } } ];
+    my @corners;
+    for my $loc ( qw/ upper_left upper_right lower_right lower_left center/ ) {
+        my $coord = [ map sprintf( "%.1f", $_ ), @{ $lookup{ $loc } } ];
         # Project
-        my $got =
-            [ map { sprintf( "%.3f", $_ ) }
-                $image->pix2proj( $coord->[ 0 ], $coord->[ 1 ] ) ];
-        is_deeply( $got, $exp->{ $tiff }{ $loc }, "$tiff: $loc projection" );
+        my $got = [ map sprintf( "%.3f", $_ ), $image->pix2proj( @$coord ) ];
+        is_deeply( $got, $exp{ $tiff }{ $loc }, "$tiff: $loc projection" );
+
+        push @corners, $got unless $loc eq 'center';
+
         # Back to pixels
         $got =
             [ map { my $n = sprintf( "%.1f", $_ ); $n != 0 ? $n : '0.0' }
                 $image->proj2pix( @$got ) ];
         is_deeply( $got, $coord, "$tiff: $loc pixels" );
     }
-}
+    # Test corners method
+    my @got_corners = map [ map sprintf( "%.3f", $_ ), @$_ ], $image->corners();
+    # warn "@$_\n" for @got_corners;
+    is_deeply( \@got_corners, \@corners, "$tiff: corners" );
+} ## end for my $tiff ( keys %exp)

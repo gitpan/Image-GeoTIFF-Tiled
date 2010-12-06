@@ -6,7 +6,7 @@ use Carp;
 use Image::GeoTIFF::Tiled;
 
 use vars qw/ $VERSION /;
-$VERSION = '0.07';
+$VERSION = '0.08';
 # $NULL = undef;
 # $NULL    = -1;
 
@@ -21,11 +21,12 @@ sub new {
     $self->reset;
 
     # $self->image(delete $opts->{image});
-    $self->boundary( delete $opts->{ boundary } );
+    my $boundary = delete $opts->{ boundary };
+    $self->boundary( $boundary );
     $self->{ buffer } = delete $opts->{ buffer };
+    $self->{ mask }   = delete $opts->{ mask };
     confess "Invalid options: %$opts" if %$opts;
 
-    my $boundary = $self->boundary;
     $self->rows( int( $boundary->[ 3 ] ) - int( $boundary->[ 1 ] ) + 1 )
         ;    # pixel rows
     $self->cols( int( $boundary->[ 2 ] ) - int( $boundary->[ 0 ] ) + 1 )
@@ -86,11 +87,12 @@ sub rows        { &_elem( shift, 'rows',        @_ ); }
 sub cols        { &_elem( shift, 'cols',        @_ ); }
 sub current_row { &_elem( shift, 'current_row', @_ ); }
 sub current_col { &_elem( shift, 'current_col', @_ ); }
-sub buffer      { return shift->{ buffer } }
+sub buffer      { shift->{ buffer } }
+sub mask        { shift->{ mask } }
 
 sub get {
     my ( $self, $row, $col ) = @_;
-    $self->buffer->[ $row ][ $col ];
+    $self->{ buffer }[ $row ][ $col ];
 }
 
 sub current_coord {
@@ -107,8 +109,9 @@ sub current_coord {
 
 sub next {
     my ( $self ) = @_;
-    my ( $rows, $cols ) = ( $self->{ rows },        $self->{ cols } );
-    my ( $row,  $col )  = ( $self->{ current_row }, $self->{ current_col } );
+    my ( $rows,   $cols ) = ( $self->{ rows },        $self->{ cols } );
+    my ( $row,    $col )  = ( $self->{ current_row }, $self->{ current_col } );
+    my ( $buffer, $mask ) = ( $self->{ buffer },      $self->{ mask } );
     my $val;
     NEXT_VAL: {
         # next buffer indices
@@ -126,10 +129,16 @@ sub next {
         {
             return;
         }
-        $val = $self->buffer->[ $row ][ $col ];
         # Return the next valid value
-        redo NEXT_VAL unless defined $val;
-        # redo NEXT_VAL if $val == $NULL;
+        $val = $buffer->[ $row ][ $col ];
+        # Test against mask if given
+        if ( $mask ) {
+            redo NEXT_VAL unless $mask->[ $row ][ $col ];
+        }
+        else {
+            redo NEXT_VAL unless defined $val;
+            # redo NEXT_VAL if $val == $NULL;
+        }
     }
     # Store coordinate
     $self->{ current_row } = $row;
@@ -151,11 +160,11 @@ sub adjacencies {
     );
     if ( $row < 1 ) {
         # undef top row
-        undef $adj[$_] for (0..2);
+        undef $adj[ $_ ] for ( 0, 1, 2 );
     }
     if ( $col < 1 ) {
         # undef left column
-        undef $adj[$_] for (0,6,7);
+        undef $adj[ $_ ] for ( 0, 6, 7 );
     }
     @adj;
 }
@@ -163,13 +172,12 @@ sub adjacencies {
 #================================================================================================#
 # DUMP
 
-sub dump_buffer {
-    my ( $self ) = @_;
-    print "\nBuffer:\n";
+sub _dump {
+    my ( $self, $data ) = @_;
     for my $r ( 0 .. $self->rows - 1 ) {
         for my $c ( 0 .. $self->cols - 1 ) {
             print " " if $c != 0;
-            my $v = $self->buffer->[ $r ][ $c ];
+            my $v = $data->[ $r ][ $c ];
             # if ( $v == $NULL ) {
             if ( not defined $v ) {
                 print '---';
@@ -179,6 +187,17 @@ sub dump_buffer {
             }
         }
         print "\n";
+    }
+}
+
+sub dump_buffer {
+    my ( $self ) = @_;
+    print "\nBuffer:\n";
+    $self->_dump($self->buffer);
+    my $mask = $self->mask;
+    if ( $mask ) {
+        print "\nMask:\n";
+        $self->_dump($mask);
     }
 }
 
@@ -217,7 +236,7 @@ A convenience class to iterate through arbitrarily-shaped raster data. Returns s
 
 =item new(\%opts)
 
-Where %opts must have the keys boundary and buffer. Used by get_iterator_* methods.
+Where %opts must have the keys boundary and buffer, and optionally mask.
 
 =item boundary
 
@@ -225,7 +244,11 @@ The boundary of the buffer.
 
 =item buffer
 
-Returns the reference to the data buffer (a 2D array).
+Returns the data buffer (a 2D array).
+
+=item mask
+
+Returns the buffer mask (a 2D array) or undef if one wasn't provided.
 
 =item get($row,$col)
 

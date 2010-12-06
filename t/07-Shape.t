@@ -91,10 +91,10 @@ for my $tiff ( <./t/samples/usgs*.tif> ) {
     is_deeply( \@b, $b, 'boundary' );
     my @c = $s->corners;
     my $c = [
-        [ $b->[ 0 ], $b->[ 1 ] ],
-        [ $b->[ 0 ], $b->[ 3 ] ],
-        [ $b->[ 2 ], $b->[ 1 ] ],
-        [ $b->[ 2 ], $b->[ 3 ] ]
+        [ $b->[ 0 ], $b->[ 1 ] ],    # ul
+        [ $b->[ 2 ], $b->[ 1 ] ],    # ur
+        [ $b->[ 2 ], $b->[ 3 ] ],    # lr
+        [ $b->[ 0 ], $b->[ 3 ] ],    # ll
     ];
     is_deeply( \@c, $c, 'corners' );
     # Points

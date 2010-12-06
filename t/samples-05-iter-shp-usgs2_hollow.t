@@ -20,7 +20,7 @@ for my $i ( 1 .. 2 ) {
     my $shp       = Geo::ShapeFile->new( "./t/samples/usgs2_hollow$i" );
     my $shp_shape = $shp->get_shp_record( 1 );
     my $shape =
-        Image::GeoTIFF::Tiled::Shape->load_shape( $image, undef, $shp_shape );
+        Image::GeoTIFF::Tiled::Shape->load_shape( $image, $shp_shape );
     my $iter = $image->get_iterator_shape( $shape );
 
 #    $iter->dump_buffer;

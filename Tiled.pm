@@ -3,20 +3,22 @@ use strict;
 use warnings;
 use Carp;
 use Data::Dumper;
-use List::MoreUtils qw(natatime mesh);
+# use List::MoreUtils qw(natatime);
 use IO::Handle;
 use Image::GeoTIFF::Tiled::Iterator;
 use Image::GeoTIFF::Tiled::Shape;
 
+# TODO: Add x_resolution and y_resolution and resolution_unit
+
 use vars qw( $VERSION );
-$VERSION = '0.07';
+$VERSION = '0.08';
 
 use Inline C => Config => INC => '-I/usr/include/geotiff',
     LIBS     => '-ltiff -lgeotiff';
 
 use Inline
     C       => 'DATA',
-    VERSION => '0.07',
+    VERSION => '0.08',
     NAME    => 'Image::GeoTIFF::Tiled';
 
 # my $ERR_KEY = '_tif_err';
@@ -41,9 +43,8 @@ my %TEMPLATE = (
 );
 
 sub constrain_boundary {
-    my ( $self, @px_bound ) = @_;
-    my @constrained = @px_bound;
-
+    my ( $self, @constrained ) = @_;
+    confess "Bad boundary (@constrained)" unless @constrained == 4;
     # Round to nearest int
     for ( 0 .. 1 ) {
         $constrained[ $_ ] = sprintf( "%.0f", $constrained[ $_ ] + .00001 );
@@ -83,16 +84,33 @@ sub constrain_boundary {
     @constrained;
 } ## end sub constrain_boundary
 
-sub bounds {
-    my ( $self, $proj ) = @_;
-    my ( $xmin, $ymax ) = $self->pix2proj( 0, 0 );
-    my ( $xmax, $ymin ) = $self->pix2proj( $self->width, $self->length );
-    if ( $proj ) {
-        ( $ymax, $xmin ) = $proj->inverse( $xmin, $ymax );
-        ( $ymin, $xmax ) = $proj->inverse( $xmax, $ymin );
-    }
-    ( $xmin, $ymin, $xmax, $ymax );
+sub _corner {
+    my ( $self, $x, $y, $proj ) = @_;
+    ( $x, $y ) = $self->pix2proj( $x, $y );
+    ( $y, $x ) = $proj->inverse( $x, $y ) if $proj;
+    ( $x, $y );
 }
+
+sub corners {
+    my ( $self, $proj ) = @_;
+    my ( $w, $l ) = ( $self->width, $self->length );
+    (
+        [ $self->_corner( 0,  0,  $proj ) ],    # Upper Left
+        [ $self->_corner( $w, 0,  $proj ) ],    # Upper Right
+        [ $self->_corner( $w, $l, $proj ) ],    # Lower Right
+        [ $self->_corner( 0,  $l, $proj ) ],    # Lower Left
+    );
+}
+
+# sub bounds {
+    # my ( $xmin, $ymax ) = $self->pix2proj( 0, 0 );
+    # my ( $xmax, $ymin ) = $self->pix2proj( $self->width, $self->length );
+    # if ( $proj ) {
+    # ( $ymax, $xmin ) = $proj->inverse( $xmin, $ymax );
+    # ( $ymin, $xmax ) = $proj->inverse( $xmax, $ymin );
+    # }
+    # ( $xmin, $ymin, $xmax, $ymax );
+# }
 
 sub tile_area {
     my $self = shift;
@@ -101,11 +119,11 @@ sub tile_area {
 
 sub get_tile {
     my ( $self, $tile ) = @_;
-    my $bps      = $self->bits_per_sample;
-    my $fmt      = $self->sample_format || 1;
-    my $t = $TEMPLATE{ "$bps,$fmt" };
-    unless ($t) {
-        # $self->{$ERR_KEY} = 
+    my $bps = $self->bits_per_sample;
+    my $fmt = $self->sample_format || 1;
+    my $t   = $TEMPLATE{ "$bps,$fmt" };
+    unless ( $t ) {
+        # $self->{$ERR_KEY} =
         carp "Couldn't find an unpack template for $bps BPS, format $fmt";
         return;
     }
@@ -172,14 +190,19 @@ sub get_iterator_tile {
 
 sub tile2grid {
     my $self = shift;
-    my $data = ref $_[0] ? $_[0] : $self->get_tile($_[0]);
-    my $across = $self->tile_width;
+    my $data = ref $_[ 0 ] ? $_[ 0 ] : $self->get_tile( $_[ 0 ] );
     my @mat;
-    my $it = natatime $across, @$data;
-    while (my @vals = $it->()) {
-        push @mat, \@vals;
+    my $across = $self->tile_width;
+    confess @$data . " % $across != 0" if @$data % $across;
+    # my $it = natatime $across, @$data;
+    # while (my @vals = $it->()) {
+        # push @mat, \@vals;
+    # }
+    for ( my $offset = 0; $offset < @$data; $offset += $across ) {
+        # push @mat, [ splice @$data, $offset, $across ];
+        push @mat, [ @$data[ $offset .. $offset + $across - 1 ] ];
     }
-    # [ map [ @$data[ $_ * $across .. $_ * $across + $across - 1 ] ], 0 .. $down - 1 ];
+# [ map [ @$data[ $_ * $across .. $_ * $across + $across - 1 ] ], 0 .. $down - 1 ];
     \@mat;
 }
 
@@ -206,13 +229,49 @@ sub get_iterator_tiles {
 
 sub get_iterator {
     my $self = shift;
+    if ( @_ == 0 ) {
+        # Entire image
+        return $self->get_iterator_pix( 0, 0, $self->width - 1,
+            $self->length - 1 );
+    }
     if ( @_ == 1 ) {
         return $self->get_iterator_shape( @_ ) if ref $_[ 0 ];
         return $self->get_iterator_tile( @_ );
     }
-    return $self->get_iterator_tiles( @_ ) if @_ == 2;
+    if ( @_ == 2 ) {
+        return $self->get_iterator_shape( @_ ) if ref $_[ 0 ] and ref $_[ 1 ];
+        return $self->get_iterator_tiles( @_ );
+    }
+    if ( @_ == 3 ) {
+        return $self->get_iterator_shape( @_ ) if ref $_[ 0 ] and $_[ 2 ];
+    }
     return $self->get_iterator_pix( @_ )   if @_ == 4;
     confess "Unknown args: @_";
+}
+
+sub get_iterator_mask {
+    my ( $self, $shape, $proj, $buffer_size ) = @_;
+    confess "No shape" unless $shape and ref $shape;
+    confess "You must specify a buffer size" unless $buffer_size;
+    unless ( $shape->isa( 'Image::GeoTIFF::Tiled::Shape' ) ) {
+        $shape =
+            Image::GeoTIFF::Tiled::Shape->load_shape( $self, $shape, $proj );
+    }
+    my @shape_bound = $shape->boundary;
+    # Extend boundary to include at least $buffer_size pixels outside
+    $shape_bound[ 0 ] -= $buffer_size;
+    $shape_bound[ 1 ] -= $buffer_size;
+    $shape_bound[ 2 ] += $buffer_size;
+    $shape_bound[ 3 ] += $buffer_size;
+    my @px_bound = $self->constrain_boundary( @shape_bound );
+    return unless @px_bound;
+    my $data = $self->extract_grid( @px_bound );
+    Image::GeoTIFF::Tiled::Iterator->new( {
+            boundary => \@px_bound,
+            buffer   => $data,
+            mask     => $self->mask_shape( $data, @px_bound[ 0, 1 ], $shape ),
+        }
+    );
 }
 
 sub get_iterator_shape {
@@ -226,38 +285,57 @@ sub get_iterator_shape {
     return unless @px_bound;
     # print "Shape boundary: ",join(' ',$shape->boundary),"\n";
     # print "Constrained boundary: @px_bound\n";
-    my $data = $self->extract_grid(@px_bound);
+    my $data = $self->extract_grid( @px_bound );
     Image::GeoTIFF::Tiled::Iterator->new( {
             boundary => \@px_bound,
-            buffer   => $self->filter_shape( $data, @px_bound[0,1], $shape )
+            buffer   => $self->filter_shape( $data, @px_bound[ 0, 1 ], $shape )
         }
     );
 }
 
 sub filter_shape {
-    my ( $self, $data, $x0, $y0, $shape ) = @_;
+    shift->_mask_shape( @_ );
+}
+
+sub mask_shape {
+    shift->_mask_shape( @_, 1 );
+}
+
+sub _mask_shape {
+    my ( $self, $data, $x0, $y0, $shape, $masking ) = @_;
     # Ray-cast: replace outside data with undef
     my $cols = @{ $data->[ 0 ] };
     # print "Cols: $cols\n";
     my @c_all = 0 .. $cols - 1;
+    my @mask = $masking ? ( map [ map 1, @$_ ], @$data ) : ();
     for my $r ( 0 .. @$data - 1 ) {
-        my $x = int($x0) + 0.5;
-        my $y = $y0 + $r;
-        my $xvert     = $shape->get_x( $y );
+        my $x     = int( $x0 ) + 0.5;
+        my $y     = $y0 + $r;
+        my $xvert = $shape->get_x( $y );
         unless ( @$xvert ) {
-            # undef the whole row
-            $data->[ $r ] = [ map undef, @c_all ];
+            # the whole row is outside
+            if ( $masking ) {
+                $mask[ $r ] = [ map 0, @c_all ];
+            }
+            else {
+                $data->[ $r ] = [ map undef, @c_all ];
+            }
             next;
         }
         # print "x: $x, y: $y, xvert: @$xvert\n";
         my $next_vert = shift @$xvert;
-        my $inside = 0; # Start outside shape
+        my $inside    = 0;               # Start outside shape
         for my $c ( @c_all ) {
             unless ( defined $next_vert ) {
                 # print "row, x = $r,$x\n";
                 confess "No next_vert yet still inside!" if $inside;
-                # undef rest of row
-                undef $data->[ $r ][ $_ ] for $c .. $cols - 1;
+                # rest of row is outside
+                if ( $masking ) {
+                    $mask[ $r ][ $_ ] = 0 for $c .. $cols - 1;
+                }
+                else {
+                    undef $data->[ $r ][ $_ ] for $c .. $cols - 1;
+                }
                 last;
             }
             # print "Next vertex: $next_vert\n";
@@ -265,18 +343,24 @@ sub filter_shape {
                 $inside = $inside ? 0 : 1;    # switch state
                 $next_vert = shift @$xvert;
             }
-            undef $data->[ $r ][ $c ] unless $inside;
+            unless ( $inside ) {
+                if ( $masking ) {
+                    $mask[ $r ][ $c ] = 0;
+                }
+                else {
+                    undef $data->[ $r ][ $c ];
+                }
+            }
             $x++;
         }
         # print Dumper($data->[$r]),"\n";
     } ## end for my $r ( 0 .. @$data...)
-    $data;
-} ## end sub extract_shape
-
+    $masking ? \@mask : $data;
+} ## end sub _mask_shape
 
 sub tiles2grid {
     my $self = shift;
-    my $data = @_ == 2 ? $self->get_tiles(@_) : shift;
+    my $data = @_ == 2 ? $self->get_tiles( @_ ) : shift;
     confess "Data not in 3D tiles"
         unless ref $data
             and ref $data             eq 'ARRAY'
@@ -287,8 +371,16 @@ sub tiles2grid {
     my $across = $self->tile_width;
     my @grid;
     for my $row ( @$data ) {
-        my @its = map { natatime $across, @$_ } @$row;
-        push @grid, [ map $_->(), @its ] for 0 .. $across - 1;
+        # my @its = map { natatime $across, @$_ } @$row;
+        # push @grid, [ map $_->(), @its ] for 0 .. $across - 1;
+        for ( my $offset = 0; $offset < @{ $row->[ 0 ] }; $offset += $across ) {
+            my @grid_row;
+            my @chunk = $offset .. $offset + $across - 1;
+            for my $tile ( @$row ) {
+                push @grid_row, @$tile[ @chunk ];
+            }
+            push @grid, \@grid_row;
+        }
     }
     \@grid;
 }
@@ -322,60 +414,80 @@ sub _check_boundary {
 
 sub extract_grid {
     my $self = shift;
-    return unless $self->_check_boundary(@_);
-    my ($xmin,$ymin,$xmax,$ymax) = @_;          # User-defined boundary
-    my ($ul,$br) = $self->_pbound2corners(@_);
-    my $across = $self->tile_width;             # Pixels per tile row
-    my $down = $self->tile_length;
-    my $data =  $self->get_tiles($ul,$br);      # 3D tile data
-    my @grid;                                   # 2D tile grid
-    
+    return unless $self->_check_boundary( @_ );
+    my ( $xmin, $ymin, $xmax, $ymax ) = @_;    # User-defined boundary
+    my ( $ul, $br ) = $self->_pbound2corners( @_ );
+    my $across = $self->tile_width;               # Pixels per tile row
+    my $down   = $self->tile_length;
+    my $data   = $self->get_tiles( $ul, $br );    # 3D tile data
+    my @grid;                                     # 2D tile grid
+
     # Only extract data in the pixel boundary from $data
-    my ($x0,$y0) = $self->tile2pix($ul,0);      # Data point 0
-    
+    my ( $x0, $y0 ) = $self->tile2pix( $ul, 0 );    # Data point 0
+
     # TILE[ROW][COL] = TILE[ROW * ACROSS + COL]
-    my $c_first = $xmin % $across;  # First pixel-row-col
-    my $c_last = $xmax % $across;   # Last pixel-row-col
+    my $c_first = $xmin % $across;                  # First pixel-row-col
+    my $c_last  = $xmax % $across;                  # Last pixel-row-col
     for my $tr ( 0 .. @$data - 1 ) {
-        my $tiles = $data->[$tr];
+        my $tiles = $data->[ $tr ];
+        my $tiles_n = @$tiles;
         # Tile iterators
-        my @iters = map { natatime $across, @$_ } @$tiles;
-        for my $gr ( 0 .. $down - 1 ) { # grid row
+        # my @iters = map { natatime $across, @$_ } @$tiles;
+        my $offset = 0;
+        for my $gr ( 0 .. $down - 1 ) {             # grid row
             my $y = $y0 + $tr * $down + $gr;
             unless ( $y >= $ymin and $y <= $ymax ) {
-                $_->() for @iters;      # skip data
+                # $_->() for @iters;                  # skip data
+                $offset += $across;
                 next;
             }
             my @grid_row;
+            # my @chunk = $offset .. $offset + $across - 1;
             # First tile
             {
-                my @tile_row = $iters[0]->();   # One row of pixels
-                if ( @iters == 1 ) {
+                # my @tile_row = $iters[ 0 ]->();     # One row of pixels
+                # my @tile_row = @{ $tiles->[ 0 ] }[ @chunk ];
+                if ( $tiles_n == 1 ) {
                     # only one tile across
-                    push @grid_row, @tile_row[$c_first..$c_last];
+                    push @grid_row,
+                        @{ $tiles->[ 0 ] }
+                        [ $offset + $c_first .. $offset + $c_last ];
+                    # @tile_row[ $c_first .. $c_last ];
                 }
                 else {
-                    push @grid_row, @tile_row[$c_first..$across - 1];
+                    # Go to the end of the tile
+                    push @grid_row,
+                        @{ $tiles->[ 0 ] }
+                        [ $offset + $c_first .. $offset + $across - 1 ];
+                    # @tile_row[ $c_first .. $across - 1 ];
                 }
             }
             # Middle tiles
-            for ( 1 .. @iters - 2 ) {
-                push @grid_row, $iters[$_]->();
+            if ( $tiles_n > 2 ) {
+                my @chunk = $offset .. $offset + $across - 1;
+                for ( 1 .. $tiles_n - 2 ) {
+                    # push @grid_row, $iters[ $_ ]->();
+                    push @grid_row, @{ $tiles->[ $_ ] }[ @chunk ];
+                }
             }
             # Last tile
-            if ( @iters > 1 ) {
-                my @tile_data = $iters[-1]->();
-                push @grid_row, @tile_data[0..$c_last];
+            if ( $tiles_n > 1 ) {
+                # my @tile_data = @{ $tiles->[ -1 ] }[ @chunk ];
+                # $iters[ -1 ]->();
+                push @grid_row,
+                    @{ $tiles->[ -1 ] }[ $offset .. $offset + $c_last ];
+                # @tile_data[ 0 .. $c_last ];
             }
             push @grid, \@grid_row;
+            $offset += $across;
         }
-        if ( my @vals = $iters[0]->() ) {
-            print Dumper \@grid;
-            confess "\nTile data left over:\n(@vals)\n";
-        }
-    }
+        # if ( my @vals = $iters[ 0 ]->() ) {
+            # print Dumper \@grid;
+            # confess "\nTile data left over:\n(@vals)\n";
+        # }
+    } ## end for my $tr ( 0 .. @$data...)
     \@grid;
-}   
+} ## end sub extract_grid
 
 # DEFUNCT - WENT FROM 2D -> 2D
 # sub extract_grid {
@@ -790,7 +902,7 @@ SV* get_raw_tile(SV* obj, int tile) {
     // Read in buffer
     buffer = _TIFFmalloc(image->tile_size);
     if ( buffer == NULL )
-        croak("Unable to allocate buffer (_TIFFmalloc).");
+        croak("Unable to allocate buffer (_TIFFmalloc)");
     _TIFFmemset(buffer,0,image->tile_size);
 
     ret =
@@ -800,11 +912,11 @@ SV* get_raw_tile(SV* obj, int tile) {
             buffer,
             image->tile_size );
     if ( ret == -1 )
-        croak("Read error on tile (TIFFReadEncodedTile).");
+        croak("Read error on tile (TIFFReadEncodedTile)");
 
     sv_buf = newSVpv(buffer,image->tile_size);
     _TIFFfree(buffer);
-    
+//    sv_2mortal(sv_buf);
     return sv_buf;
 }
 

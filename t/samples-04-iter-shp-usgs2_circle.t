@@ -23,7 +23,7 @@ my $image     = Image::GeoTIFF::Tiled->new( "./t/samples/usgs2_.tif" );
 my $shp       = Geo::ShapeFile->new( './t/samples/usgs2_circle' );
 my $shp_shape = $shp->get_shp_record( 1 );
 my $shape =
-    Image::GeoTIFF::Tiled::Shape->load_shape( $image, undef, $shp_shape );
+    Image::GeoTIFF::Tiled::Shape->load_shape( $image, $shp_shape );
 my $iter = $image->get_iterator_shape( $shape );
 test_contains( $image, $iter, $shp_shape );
 my $row   = -1;                   # Incremented, from 0

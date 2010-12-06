@@ -10,14 +10,20 @@ my $tif = Image::GeoTIFF::Tiled->new( './t/samples/usgs1_.tif' );
 # $tif->print_meta;
 
 my $tile0 = $tif->get_tile( 0 );
-
 my $mat = $tif->tile2grid( $tile0 );
+print Dumper ( $tile0 ), "\n";
+print Dumper ( $mat ),   "\n";
 for my $r ( 0 .. @$mat - 1 ) {
     my $row    = $mat->[ $r ];
     my $across = @$row;
     my $i      = $r * $across;
-    is( $across, $tif->tile_width, 'across' );
-    is_deeply( $row, [ @$tile0[ $i .. $i + $across - 1 ] ], "tile2grid at $i" );
+    is( $across, $tif->tile_width, "across ($across)" );
+    die
+        unless is_deeply(
+                $row,
+                [ @$tile0[ $i .. $i + $across - 1 ] ],
+                "tile2grid at $i"
+        );
 }
 # print Dumper ($tile0), "\n";
 # print Dumper ($mat),"\n";

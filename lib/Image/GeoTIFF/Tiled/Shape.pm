@@ -16,7 +16,7 @@ use Image::GeoTIFF::Tiled::ShapePart;
 #   - rows should be ordered on longitude (x) (specific method call when using main method)
 
 use vars qw/ $VERSION /;
-$VERSION = '0.07';
+$VERSION = '0.08';
 
 #================================================================================================#
 
@@ -34,19 +34,18 @@ sub new {
         $self->y_max( $opts->[ 3 ] );
     }
     elsif ( ref $opts eq 'HASH' ) {
-        for ( keys %{ $opts } ) {
-            $self->x_min( $opts->{ $_ } ) if $_ eq 'x_min';
-            $self->y_min( $opts->{ $_ } ) if $_ eq 'y_min';
-            $self->x_max( $opts->{ $_ } ) if $_ eq 'x_max';
-            $self->y_max( $opts->{ $_ } ) if $_ eq 'y_max';
-        }
+        $self->x_min( delete $opts->{ x_min } );
+        $self->y_min( delete $opts->{ y_min } );
+        $self->x_max( delete $opts->{ x_max } );
+        $self->y_max( delete $opts->{ y_max } );
+        confess "Unrecognized params: %$opts" if %$opts;
     }
-    croak "Boundary required." unless grep { defined $_ } $self->boundary;
+    confess "Boundary required" unless grep defined, $self->boundary;
     return $self;
 }
 
 sub load_shape {
-    my ( $class, $tiff, $proj, $shape ) = @_;
+    my ( $class, $tiff, $shape, $proj ) = @_;
     croak "loading shapes must be called as class invocant"
         if ref $class and $class ne __PACKAGE__;
     croak "Image::GeoTIFF::Tiled required"
@@ -63,8 +62,7 @@ sub load_shape {
         load 'Geo::ShapeFile';    # run-time loading
         my $boundary =
             [ $shape->x_min, $shape->y_min, $shape->x_max, $shape->y_max ];
-        Image::GeoTIFF::Tiled::Shape->project_boundary( $proj, $boundary )
-            if defined $proj;
+        _project_boundary( $proj, $boundary ) if defined $proj;
         $self = Image::GeoTIFF::Tiled::Shape->new(
             [ $tiff->proj2pix_boundary( @$boundary ) ] );
         for my $i ( 1 .. $shape->num_parts ) {
@@ -80,13 +78,13 @@ sub load_shape {
         $self->finish_loading;
     }
     else {
-        croak "Cannot load unknown shape";
+        croak "Cannot load unknown shape: $shape";
     }
     return $self;
 } ## end sub load_shape
 
-sub project_boundary {
-    my ( $class, $proj, $b ) = @_;
+sub _project_boundary {
+    my ( $proj, $b ) = @_;
     my @px = ( $b->[ 0 ], $b->[ 0 ], $b->[ 2 ], $b->[ 2 ] );
     my @py = ( $b->[ 3 ], $b->[ 1 ], $b->[ 3 ], $b->[ 1 ] );
     for ( 0 .. 3 ) {
@@ -113,16 +111,16 @@ sub y_max { &_elem( shift, 'y_max', @_ ); }
 
 sub boundary {
     my ( $self ) = @_;
-    return ( $self->x_min, $self->y_min, $self->x_max, $self->y_max );
+    ( $self->x_min, $self->y_min, $self->x_max, $self->y_max );
 }
 
 sub corners {
     my ( $self ) = @_;
-    return (
-        [ $self->x_min, $self->y_min ],
-        [ $self->x_min, $self->y_max ],
-        [ $self->x_max, $self->y_min ],
-        [ $self->x_max, $self->y_max ]
+    (
+        [ $self->x_min, $self->y_min ],    # Upper Left
+        [ $self->x_max, $self->y_min ],    # Upper Right
+        [ $self->x_max, $self->y_max ],    # Lower Right
+        [ $self->x_min, $self->y_max ],    # Lower Left
     );
 }
 
@@ -266,7 +264,7 @@ Image::GeoTIFF::Tiled::Shape
     # Initiate an instance via a class factory method, importing a pre-existing shape object:
     use Geo::ShapeFile;
     my $shp_shape = ... # A Geo::ShapeFile::Shape retrieved from Geo::ShapeFile methods
-    my $shape = Image::GeoTIFF::Tiled::Shape->load_shape( $tiff, $proj, $shp_shape );
+    my $shape = Image::GeoTIFF::Tiled::Shape->load_shape( $tiff, $shp_shape, $proj );
     
     # OR Create your own:
     my $shape = Image::GeoTIFF::Tiled::Shape->new({
@@ -312,11 +310,11 @@ where %boundary has the x_min, y_min, x_max, and y_max keys filled or @boundary 
 
 =over
 
-=item load_shape( $tiff, $proj, $shape )
+=item load_shape( $tiff, $shape, $proj )
 
 Loads a pre-defined shape object defined by an external class. Currently only loads L<Geo::ShapeFile::Shape> objects. 
 
-L<Geo::Proj4> and L<Image::GeoTIFF::Tiled> objects must be pre-loaded into the class before calling this method, unless the shape is already projected, in which case pass undef as the $proj parameter.
+L<Geo::Proj4> and L<Image::GeoTIFF::Tiled> objects must be pre-loaded into the class before calling this method, unless the shape is already projected, in which case omit last argument.
 
 =back
 
@@ -324,17 +322,17 @@ L<Geo::Proj4> and L<Image::GeoTIFF::Tiled> objects must be pre-loaded into the c
 
 =over
 
-=item x_min x_max y_min y_max
+=item x_min y_min x_max y_max
 
-Retrieves the boundary values.
+Boundary values.
 
 =item boundary
 
-Equivalent to (C<<$shape->x_min>>, C<<$shape->y_min>>, C<<$shape->x_max>>, C<<$shape->y_max>>).
+Returns the list of (x_min, y_min, x_max, y_max).
 
 =item corners
 
-Returns a list of four two-element arrayref's containing the upper left, lower left, upper right, and lower right corner coordinates, in that order.
+Returns a list of four two-element arrayref's containing the upper left, upper right, lower right, and lower left corner coordinates, in that order.
 
 =item num_parts
 
@@ -363,10 +361,6 @@ Sorts the internal parts array on the upper point latitude (called by finish_loa
 =item finish_loading
 
 Call when done making a custom shape.
-
-=item project_boundary($proj,$b)
-
-Class method. Returns the projected boundary using projection (L<Geo::Proj4>) $proj and boundary $b, a 4-element array ref with x_min, y_min, x_max, y_max as values.
 
 =item get_x($y)
 

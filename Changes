@@ -1,5 +1,11 @@
 Revision history for Perl extension Image::GeoTIFF::Tiled.
 
+0.08  Tue Aug 31 00:00:00 2010
+    - Replaced natatime with slices due to its horrible memory leaks
+    - Removed bounds(), added corners() + tests in Tiled.pm
+    - Changed boundary() and corners() in Shape.pm to be consistent with other classes. Updated pod + tests.
+    - Changed order of parameters in load_shape to have $proj at the end
+
 0.07  Wed Jul 21 00:00:00 2010
     - Smaller usgs samples
     - Added more tests

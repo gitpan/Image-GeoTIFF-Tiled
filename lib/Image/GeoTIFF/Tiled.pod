@@ -60,9 +60,11 @@ The length (height) of the image in pixels.
 
 The width of the image in pixels.
 
-=item bounds($proj)
+=item corners($proj)
 
-Returns (xmin,ymin,xmax,ymax) boundary of image as a list. Will be in projected coordinates if a L<Geo::Proj4> projection object isn't passed; otherwise geographic coordinates.
+Returns the 4 corners of the image as a list of [$x,$y] arrayrefs. The corners are in the following order: upper left, upper right, lower right, lower left.
+
+Will be in projected coordinates if a L<Geo::Proj4> projection object isn't passed; otherwise geographic coordinates.
 
 =item constrain_boundary($xmin,$ymin,$xmax,$ymax)
 
@@ -145,23 +147,23 @@ These methods transform projection and pixel coordinates.
 
 =over
 
-=item center_pixel($x,$y)
+=item center_pixel($x, $y)
 
 Centers the given pixel coordinates to the middle of the pixel (mutative).
 
-=item proj2pix_m($x,$y)
+=item proj2pix_m($x, $y)
 
 Transforms the given projection coordinate to its corresponding pixel coordinate (mutative).
 
-=item proj2pix($x,$y)
+=item proj2pix($x, $y)
 
 Transforms the given projection coordinate, returning its corresponding pixel coordinate as a list.
 
-=item pix2proj_m($x,$y)
+=item pix2proj_m($x, $y)
 
 Transforms the given pixel coordinate to its corresponding projection coordinate (mutative).
 
-=item pix2proj($x,$y)
+=item pix2proj($x, $y)
 
 Transforms the given pixel coordinate, returning its corresponding projection coordinate as a list.
 
@@ -171,19 +173,19 @@ Transforms the given pixel coordinate, returning its corresponding projection co
 
 =over
 
-=item pix2tile($x,$y)
+=item pix2tile($x, $y)
 
 Returns the tile number of the given pixel coordinates.
 
-=item pix2tile_m($tile,$i_t,$x,$y)
+=item pix2tile_m($tile, $i_t, $x, $y)
 
 Given a tile number and the index into the tile, sets the corresponding pixel coordinates (mutative).
 
-=item tile2pix($tile,$i_t)
+=item tile2pix($tile, $i_t)
 
 Given a tile number and the index into the tile, returns the corresponding pixel coordinates as a list.
 
-=item pix2tileidx($x,$y)
+=item pix2tileidx($x, $y)
 
 Given pixel coordinates, returns the index into its tile.
 
@@ -205,7 +207,7 @@ Returns the raw tile data as a packed string encoded by libtiff into the proper 
 
 Returns a reference to the tile data in an unpacked flat array.
 
-=item get_tiles($ul,$br)
+=item get_tiles($ul, $br)
 
 Returns a reference to a 3D array (a 2D grid of references to the flat tile arrays) containing the rectangular tile data between the upper left ($ul) and lower right ($ur) tiles. 
 
@@ -225,9 +227,13 @@ Passing the upper-left/bottom-right tile numbers calls L<get_tiles> first.
 
 Extracts only those values bounded by the parameters into a 2D grid.
 
-=item filter_shape($data,$x0,$y0,$shape)
+=item filter_shape($grid, $x0, $y0, $shape)
 
-Applies a mask on C<$data> to the shape object by C<undef>-ing values in C<$data> not in the C<$shape>.
+Applies a mask on C<$grid> to the shape object by C<undef>-ing values in C<$grid> not in the C<$shape>. Returns C<$grid>.
+
+=item mask_shape($grid, $x0, $y0, $shape)
+
+Applies a mask on C<$grid> to the shape object by C<undef>-ing values in C<$grid> not in the C<$shape>. Returns a 2D mask of 0s and 1s corresponding to values in C<$grid>, where 0 values at (row,col) are outside the image in (row,col) of C<$grid>.
 
 =item dump_tile($tile)
 
@@ -247,23 +253,33 @@ Note - these receive copies of data buffers, so start-up time and memory size ma
 
 =item get_iterator(...)
 
-Convenience entry method to the get_iterator_* methods. Will die if the parameters don't make sense.
+Convenience entry method to all of the get_iterator_* methods. The special case of no arguments returns an interator on the entire image. Otherwise this method dies if the parameters don't make sense.
 
 =item get_iterator_tile($tile)
 
 Given a tile, returns an iterator constrained to the image boundary.
 
-=item get_iterator_tiles($ul,$br)
+=item get_iterator_tiles($ul, $br)
 
 Given a tile rectangle (upper-left,bottom-right), returns an iterator constrained to the image boundary.
 
-=item get_iterator_pix($x_min,$y_min,$x_max,$y_max)
+=item get_iterator_pix($x_min, $y_min, $x_max, $y_max)
 
 Given a rectangular pixel boundary, returns an iterator constrained to the image boundary.
 
-=item get_iterator_shape($shape,$proj)
+=item get_iterator_shape($shape, $proj)
 
-Given a shape, returns an iterator constrained to the image boundary.
+Given a shape, returns an iterator constrained to the image boundary. 
+
+Applies filter_shape to a buffer (so that values outside the shape are undef'ed).
+
+If not a L<Image::GeoTIFF::Tiled::Shape> object, tries to load one with the optional C<$proj> L<Geo::Proj4> projection object. This will die on failure.
+
+=item get_iterator_mask($shape, $proj, $buffer_size)
+
+Given a shape, returns an iterator constrained to the image boundary. Use C<undef> for C<$proj> if a projection isn't necessary.
+
+Applies mask_shape to a buffer with a $buffer_size pixel extension on all sides. All buffered valeus are preserved, and instead a masking buffer of 0 and 1 values define which values are in the shape. This allows adjacent values ($iter->adjacencies) to be preserved as well, even those outside the shape.
 
 If not a L<Image::GeoTIFF::Tiled::Shape> object, tries to load one with the optional C<$proj> L<Geo::Proj4> projection object. This will die on failure.
 
